@@ -321,14 +321,18 @@ struct Args {
     /// Distance threshold for merging close ranges in base pairs (default: 100)
     #[arg(short = 'd', long = "distance", default_value = "100")]
     merge_threshold: usize,
+    
+    /// Boolean mask file: 1 if node is not annotated, 0 if annotated
+    #[arg(short = 'm', long = "mask")]
+    mask: Option<String>,
 }
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
     
     // Check that at least one output format is specified
-    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() {
-        eprintln!("Error: At least one output format must be specified (--output, --bed, or --csv)");
+    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() {
+        eprintln!("Error: At least one output format must be specified (--output, --bed, --csv, or --mask)");
         std::process::exit(1);
     }
     
@@ -393,6 +397,12 @@ fn main() -> std::io::Result<()> {
         println!("CSV file written to: {}", csv_file);
     }
     
+    if let Some(mask_file) = &args.mask {
+        println!("Writing boolean mask file...");
+        write_mask_file(&gfa.nodes, &all_marked_nodes, mask_file)?;
+        println!("Mask file written to: {}", mask_file);
+    }
+    
     println!("Done!");
     Ok(())
 }
@@ -431,6 +441,32 @@ fn write_csv_file(
     // Write low-complexity nodes in red
     for node_id in marked_nodes {
         writeln!(file, "{},red", node_id)?;
+    }
+    
+    Ok(())
+}
+
+fn write_mask_file(
+    nodes: &HashMap<String, Node>,
+    marked_nodes: &HashSet<String>,
+    mask_file: &str,
+) -> std::io::Result<()> {
+    let mut file = File::create(mask_file)?;
+    
+    // Get sorted node IDs (assuming numeric IDs for proper ordering)
+    let mut node_ids: Vec<&String> = nodes.keys().collect();
+    node_ids.sort_by(|a, b| {
+        // Try to parse as numbers first, fall back to string comparison
+        match (a.parse::<i32>(), b.parse::<i32>()) {
+            (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
+            _ => a.cmp(b),
+        }
+    });
+    
+    // Write mask: 1 if NOT annotated (not low-complexity), 0 if annotated (low-complexity)
+    for node_id in node_ids {
+        let mask_value = if marked_nodes.contains(node_id) { 0 } else { 1 };
+        writeln!(file, "{}", mask_value)?;
     }
     
     Ok(())

@@ -5,7 +5,58 @@ use std::path::Path as FilePath;
 use clap::Parser;
 use noodles::bgzf;
 
-// Your complexity function (with minor fixes for compilation)
+// Shannon entropy complexity function
+pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -> Vec<f64> {
+    if seq.is_empty() || window_size == 0 {
+        return Vec::new();
+    }
+    
+    let mut results = Vec::new();
+    let seq_len = seq.len();
+    
+    for start in (0..=seq_len.saturating_sub(window_size)).step_by(step) {
+        let end = (start + window_size).min(seq_len);
+        let window_seq = &seq[start..end];
+        
+        // Calculate Shannon entropy for this window
+        let entropy = shannon_entropy(window_seq);
+        results.push(entropy);
+    }
+    
+    results
+}
+
+fn shannon_entropy(seq: &[u8]) -> f64 {
+    if seq.is_empty() {
+        return 0.0;
+    }
+    
+    let mut freqs = HashMap::new();
+    for &base in seq {
+        let normalized_base = match base {
+            b'A' | b'a' => b'A',
+            b'C' | b'c' => b'C',
+            b'G' | b'g' => b'G',
+            b'T' | b't' => b'T',
+            _ => b'N', // Handle N's and other chars
+        };
+        *freqs.entry(normalized_base).or_insert(0) += 1;
+    }
+    
+    let seq_len = seq.len() as f64;
+    let mut entropy = 0.0;
+    
+    for &count in freqs.values() {
+        if count > 0 {
+            let p = count as f64 / seq_len;
+            entropy -= p * p.log2();
+        }
+    }
+    
+    entropy
+}
+
+// Linguistic complexity function (with minor fixes for compilation)
 pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
     assert!(k <= 16); // Assuming reasonable k-mer size
@@ -323,9 +374,9 @@ struct Args {
     #[arg(short = 'o', long = "output")]
     output_gfa: Option<String>,
     
-    /// K-mer size
+    /// K-mer size (used with linguistic complexity)
     #[arg(short, long)]
-    k: u8,
+    k: Option<u8>,
     
     /// Window size for complexity calculation
     #[arg(short, long)]
@@ -335,8 +386,16 @@ struct Args {
     #[arg(short, long)]
     threshold: f64,
     
-    /// BED file to emit low-complexity ranges with info
+    /// Complexity measure type: "linguistic" or "entropy" (default: "linguistic")
+    #[arg(long, default_value = "linguistic")]
+    complexity_type: String,
+    
+    /// Step size for sliding window (used with entropy complexity, default: window_size/2)
     #[arg(long)]
+    step_size: Option<usize>,
+    
+    /// BED file to emit low-complexity ranges with info
+    #[arg(short, long)]
     bed: Option<String>,
     
     /// CSV file for Bandage node coloring (Node,Colour format)
@@ -361,10 +420,34 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
     
+    // Validate complexity type
+    if args.complexity_type != "linguistic" && args.complexity_type != "entropy" {
+        eprintln!("Error: complexity_type must be either 'linguistic' or 'entropy'");
+        std::process::exit(1);
+    }
+    
+    // Validate k parameter for linguistic complexity
+    if args.complexity_type == "linguistic" && args.k.is_none() {
+        eprintln!("Error: k parameter is required when using linguistic complexity");
+        std::process::exit(1);
+    }
+    
+    // Validate step_size parameter - only for entropy complexity
+    if args.complexity_type == "linguistic" && args.step_size.is_some() {
+        eprintln!("Error: step_size parameter cannot be used with linguistic complexity");
+        std::process::exit(1);
+    }
+    
+    // Validate k parameter - only for linguistic complexity
+    if args.complexity_type == "entropy" && args.k.is_some() {
+        eprintln!("Error: k parameter cannot be used with entropy complexity");
+        std::process::exit(1);
+    }
+    
     let input_file = FilePath::new(&args.input_gfa);
-    let k = args.k;
     let window_size = args.window_size;
     let threshold = args.threshold;
+    let step_size = args.step_size.unwrap_or(window_size / 2);
     
     println!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
@@ -384,8 +467,17 @@ fn main() -> std::io::Result<()> {
             continue;
         }
         
-        // Compute complexity
-        let complexity = linguistic_complexity(&sequence, k, window_size);
+        // Compute complexity based on selected method
+        let complexity = match args.complexity_type.as_str() {
+            "linguistic" => {
+                let k = args.k.unwrap(); // Already validated above
+                linguistic_complexity(&sequence, k, window_size)
+            },
+            "entropy" => {
+                shannon_entropy_complexity(&sequence, window_size, step_size)
+            },
+            _ => unreachable!(), // Already validated above
+        };
         
         // Find low-complexity regions
         let regions = find_low_complexity_regions(&complexity, threshold, window_size, args.merge_threshold);

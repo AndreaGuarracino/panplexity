@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write, Read};
 use std::path::Path as FilePath;
 use clap::Parser;
+use noodles::bgzf;
 
 // Your complexity function (with minor fixes for compilation)
 pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
@@ -91,7 +92,20 @@ struct GFA {
 
 fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
     let file = File::open(filename)?;
-    let reader = BufReader::new(file);
+    
+    // Check if file is gzip/bgzip compressed by reading magic bytes
+    let mut magic_bytes = [0u8; 3];
+    let mut file_clone = File::open(filename)?;
+    file_clone.read_exact(&mut magic_bytes)?;
+    
+    let reader: Box<dyn BufRead> = if magic_bytes == [0x1f, 0x8b, 0x08] {
+        // bgzip/gzip compressed
+        let bgzf_reader = bgzf::Reader::new(file);
+        Box::new(BufReader::new(bgzf_reader))
+    } else {
+        // Uncompressed
+        Box::new(BufReader::new(file))
+    };
     
     let mut nodes = HashMap::new();
     let mut paths = Vec::new();

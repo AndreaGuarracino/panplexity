@@ -258,43 +258,55 @@ fn annotate_gfa(
     path_regions: &HashMap<String, Vec<(usize, usize)>>,
     output_file: &FilePath,
 ) -> std::io::Result<()> {
-    let mut file = File::create(output_file)?;
+    let file = File::create(output_file)?;
+    
+    // Check if output should be compressed based on file extension
+    let should_compress = output_file.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext == "gz" || ext == "bgz")
+        .unwrap_or(false);
+    
+    let mut writer: Box<dyn Write> = if should_compress {
+        Box::new(bgzf::Writer::new(file))
+    } else {
+        Box::new(file)
+    };
     
     // Write nodes with annotations
     for (id, node) in &gfa.nodes {
-        write!(file, "S\t{}\t{}", id, node.sequence)?;
+        write!(writer, "S\t{}\t{}", id, node.sequence)?;
         if marked_nodes.contains(id) {
-            write!(file, "\tLC:i:1\tCL:z:red")?;
+            write!(writer, "\tLC:i:1\tCL:z:red")?;
         }
-        writeln!(file)?;
+        writeln!(writer)?;
     }
     
     // Write edges
     for edge in &gfa.edges {
-        writeln!(file, "{}", edge)?;
+        writeln!(writer, "{}", edge)?;
     }
     
     // Write paths with region annotations in comments
     for path in &gfa.paths {
-        write!(file, "P\t{}\t", path.name)?;
+        write!(writer, "P\t{}\t", path.name)?;
         let path_str: Vec<String> = path.nodes
             .iter()
             .map(|(id, forward)| format!("{}{}", id, if *forward { '+' } else { '-' }))
             .collect();
-        write!(file, "{}", path_str.join(","))?;
+        write!(writer, "{}", path_str.join(","))?;
         
         // Add low-complexity regions as optional tags
         if let Some(regions) = path_regions.get(&path.name) {
             if !regions.is_empty() {
-                write!(file, "\tLR:Z:")?;
+                write!(writer, "\tLR:Z:")?;
                 let region_strs: Vec<String> = regions
                     .iter()
                     .map(|(s, e)| format!("{}-{}", s, e))
                     .collect();
-                write!(file, "{}", region_strs.join(","))?;
+                write!(writer, "{}", region_strs.join(","))?;
             }
         }
-        writeln!(file)?;
+        writeln!(writer)?;
     }
     
     Ok(())

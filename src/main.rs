@@ -166,6 +166,7 @@ fn find_low_complexity_regions(
     complexity: &[f64],
     threshold: f64,
     window_size: usize,
+    merge_threshold: usize,
 ) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let mut in_region = false;
@@ -189,7 +190,7 @@ fn find_low_complexity_regions(
         regions.push((start, complexity.len() + window_size - 1));
     }
     
-    // Merge overlapping regions
+    // Merge regions within merge_threshold distance
     if regions.is_empty() {
         return regions;
     }
@@ -199,7 +200,8 @@ fn find_low_complexity_regions(
     
     for region in regions.iter().skip(1) {
         let last = merged.last_mut().unwrap();
-        if region.0 <= last.1 {
+        // Merge if regions overlap or are within merge_threshold distance
+        if region.0 <= last.1 + merge_threshold {
             last.1 = last.1.max(region.1);
         } else {
             merged.push(*region);
@@ -315,6 +317,10 @@ struct Args {
     /// CSV file for Bandage node coloring (Node,Colour format)
     #[arg(short = 'c', long = "csv")]
     csv: Option<String>,
+    
+    /// Distance threshold for merging close ranges in base pairs (default: 100)
+    #[arg(short = 'd', long = "distance", default_value = "100")]
+    merge_threshold: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -353,7 +359,7 @@ fn main() -> std::io::Result<()> {
         let complexity = linguistic_complexity(&sequence, k, window_size);
         
         // Find low-complexity regions
-        let regions = find_low_complexity_regions(&complexity, threshold, window_size);
+        let regions = find_low_complexity_regions(&complexity, threshold, window_size, args.merge_threshold);
         
         if !regions.is_empty() {
             println!("  Found {} low-complexity regions", regions.len());

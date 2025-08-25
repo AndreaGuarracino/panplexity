@@ -73,7 +73,6 @@ pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
 
 #[derive(Clone)]
 struct Node {
-    id: String,
     sequence: String,
     length: usize,
 }
@@ -108,7 +107,7 @@ fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
                 let id = parts[1].to_string();
                 let sequence = parts[2].to_string();
                 let length = sequence.len();
-                nodes.insert(id.clone(), Node { id, sequence, length });
+                nodes.insert(id, Node { sequence, length });
             }
             "P" => {
                 // Path line

@@ -289,10 +289,12 @@ fn annotate_gfa(
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Input GFA file
+    #[arg(short = 'g', long = "gfa")]
     input_gfa: String,
     
-    /// Output GFA file
-    output_gfa: String,
+    /// Output annotated GFA file
+    #[arg(short = 'o', long = "output")]
+    output_gfa: Option<String>,
     
     /// K-mer size
     #[arg(short, long)]
@@ -306,16 +308,25 @@ struct Args {
     #[arg(short, long)]
     threshold: f64,
     
-    /// Optional BED file to emit low-complexity ranges with info
+    /// BED file to emit low-complexity ranges with info
     #[arg(long)]
     bed: Option<String>,
+    
+    /// CSV file for Bandage node coloring (Node,Colour format)
+    #[arg(short = 'c', long = "csv")]
+    csv: Option<String>,
 }
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
     
+    // Check that at least one output format is specified
+    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() {
+        eprintln!("Error: At least one output format must be specified (--output, --bed, or --csv)");
+        std::process::exit(1);
+    }
+    
     let input_file = FilePath::new(&args.input_gfa);
-    let output_file = FilePath::new(&args.output_gfa);
     let k = args.k;
     let window_size = args.window_size;
     let threshold = args.threshold;
@@ -357,15 +368,26 @@ fn main() -> std::io::Result<()> {
     
     println!("Marked {} nodes as low-complexity", all_marked_nodes.len());
     
-    println!("Writing annotated GFA...");
-    annotate_gfa(&gfa, &all_marked_nodes, &path_regions, output_file)?;
+    if let Some(output_gfa_path) = &args.output_gfa {
+        println!("Writing annotated GFA...");
+        let output_file = FilePath::new(output_gfa_path);
+        annotate_gfa(&gfa, &all_marked_nodes, &path_regions, output_file)?;
+        println!("Annotated GFA written to: {}", output_gfa_path);
+    }
     
     if let Some(bed_file) = &args.bed {
         println!("Writing BED file with low-complexity regions...");
         write_bed_file(&path_regions, bed_file, &gfa.paths)?;
+        println!("BED file written to: {}", bed_file);
     }
     
-    println!("Done! Output written to {:?}", output_file);
+    if let Some(csv_file) = &args.csv {
+        println!("Writing CSV file for Bandage node coloring...");
+        write_csv_file(&all_marked_nodes, csv_file)?;
+        println!("CSV file written to: {}", csv_file);
+    }
+    
+    println!("Done!");
     Ok(())
 }
 
@@ -386,6 +408,23 @@ fn write_bed_file(
                 )?;
             }
         }
+    }
+    
+    Ok(())
+}
+
+fn write_csv_file(
+    marked_nodes: &HashSet<String>,
+    csv_file: &str,
+) -> std::io::Result<()> {
+    let mut file = File::create(csv_file)?;
+    
+    // Write CSV header
+    writeln!(file, "Node,Colour")?;
+    
+    // Write low-complexity nodes in red
+    for node_id in marked_nodes {
+        writeln!(file, "{},red", node_id)?;
     }
     
     Ok(())

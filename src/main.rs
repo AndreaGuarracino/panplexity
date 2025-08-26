@@ -236,10 +236,18 @@ fn find_low_complexity_regions(
 ) -> (Vec<(usize, usize)>, Vec<(usize, usize, f64)>) {
     let mut windows_with_entropy = Vec::new();
     
-    // Collect all windows below threshold with their entropy values
+    // Collect all windows below threshold with their complexity values
     for (i, &score) in complexity.iter().enumerate() {
         if score < threshold {
-            let start = i * step_size;
+            // For entropy complexity with overlapping windows, use step_size scaling
+            // For linguistic complexity, each index represents sequence position
+            let start = if step_size == window_size {
+                // Non-overlapping windows (linguistic) - direct sequence position
+                i
+            } else {
+                // Overlapping windows (entropy) - use step_size scaling
+                i * step_size
+            };
             let end = start + window_size;
             windows_with_entropy.push((start, end, score));
         }

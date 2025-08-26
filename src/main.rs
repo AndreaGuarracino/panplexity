@@ -230,99 +230,65 @@ fn find_low_complexity_regions(
     complexity: &[f64],
     threshold: f64,
     window_size: usize,
-    merge_threshold: usize,
-) -> Vec<(usize, usize)> {
-    let mut regions = Vec::new();
-    let mut in_region = false;
-    let mut start = 0;
-    
-    for (i, &score) in complexity.iter().enumerate() {
-        if score < threshold {
-            if !in_region {
-                start = i;
-                in_region = true;
-            }
-        } else if in_region {
-            // End of low-complexity region
-            regions.push((start, i + window_size - 1));
-            in_region = false;
-        }
-    }
-    
-    // Handle region extending to end
-    if in_region {
-        regions.push((start, complexity.len() + window_size - 1));
-    }
-    
-    // Merge regions within merge_threshold distance
-    if regions.is_empty() {
-        return regions;
-    }
-    
-    regions.sort_by_key(|r| r.0);
-    let mut merged = vec![regions[0]];
-    
-    for region in regions.iter().skip(1) {
-        let last = merged.last_mut().unwrap();
-        // Merge if regions overlap or are within merge_threshold distance
-        if region.0 <= last.1 + merge_threshold {
-            last.1 = last.1.max(region.1);
-        } else {
-            merged.push(*region);
-        }
-    }
-    
-    merged
-}
-
-fn find_low_complexity_windows(
-    complexity: &[f64],
-    threshold: f64,
-    window_size: usize,
     step_size: usize,
-) -> Vec<(usize, usize, f64)> {
-    let mut windows = Vec::new();
+    merge_threshold: usize,
+    with_entropy: bool,
+) -> (Vec<(usize, usize)>, Vec<(usize, usize, f64)>) {
+    let mut windows_with_entropy = Vec::new();
     
-    // Find all windows below threshold
+    // Collect all windows below threshold with their entropy values
     for (i, &score) in complexity.iter().enumerate() {
         if score < threshold {
             let start = i * step_size;
             let end = start + window_size;
-            windows.push((start, end, score));
+            windows_with_entropy.push((start, end, score));
         }
     }
     
-    // Merge overlapping windows
-    if windows.is_empty() {
-        return windows;
+    if windows_with_entropy.is_empty() {
+        return (Vec::new(), Vec::new());
     }
     
-    windows.sort_by_key(|w| w.0);
-    let mut merged = Vec::new();
-    let mut current_region = windows[0];
-    let mut entropies = vec![current_region.2];
+    // Sort by start position
+    windows_with_entropy.sort_by_key(|w| w.0);
     
-    for &window in windows.iter().skip(1) {
-        if window.0 <= current_region.1 {
-            // Overlapping - merge
-            current_region.1 = current_region.1.max(window.1);
-            entropies.push(window.2);
+    let mut merged_regions = Vec::new();
+    let mut merged_windows = Vec::new();
+    let mut current_start = windows_with_entropy[0].0;
+    let mut current_end = windows_with_entropy[0].1;
+    let mut entropies = vec![windows_with_entropy[0].2];
+    
+    for &(start, end, entropy) in windows_with_entropy.iter().skip(1) {
+        // Merge if overlapping or within merge_threshold distance
+        if start <= current_end + merge_threshold {
+            current_end = current_end.max(end);
+            entropies.push(entropy);
         } else {
-            // Non-overlapping - finalize current region
-            let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
-            merged.push((current_region.0, current_region.1, mean_entropy));
+            // Finalize current merged region
+            merged_regions.push((current_start, current_end));
             
-            current_region = window;
-            entropies = vec![window.2];
+            if with_entropy {
+                let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+                merged_windows.push((current_start, current_end, mean_entropy));
+            }
+            
+            // Start new region
+            current_start = start;
+            current_end = end;
+            entropies = vec![entropy];
         }
     }
     
     // Add final region
-    let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
-    merged.push((current_region.0, current_region.1, mean_entropy));
+    merged_regions.push((current_start, current_end));
+    if with_entropy {
+        let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+        merged_windows.push((current_start, current_end, mean_entropy));
+    }
     
-    merged
+    (merged_regions, merged_windows)
 }
+
 
 fn map_regions_to_nodes(
     path: &Path,
@@ -496,7 +462,13 @@ fn main() -> std::io::Result<()> {
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
     let threshold = args.threshold;
-    let step_size = args.step_size.unwrap_or(window_size / 2);
+    // For linguistic complexity, step_size is same as window_size (no overlap)
+    // For entropy complexity, use provided step_size or default to window_size/2
+    let step_size = if args.complexity_type == "linguistic" {
+        window_size
+    } else {
+        args.step_size.unwrap_or(window_size / 2)
+    };
     
     println!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
@@ -529,8 +501,16 @@ fn main() -> std::io::Result<()> {
             _ => unreachable!(), // Already validated above
         };
         
-        // Find low-complexity regions (for merged regions)
-        let regions = find_low_complexity_regions(&complexity, threshold, window_size, args.merge_threshold);
+        // Find low-complexity regions with optional complexity averaging
+        let with_scores = true; // Always compute scores for unified output
+        let (regions, windows) = find_low_complexity_regions(
+            &complexity, 
+            threshold, 
+            window_size, 
+            step_size,
+            args.merge_threshold,
+            with_scores
+        );
         
         if !regions.is_empty() {
             println!("  Found {} low-complexity regions", regions.len());
@@ -540,14 +520,7 @@ fn main() -> std::io::Result<()> {
             all_marked_nodes.extend(marked);
             
             path_regions.insert(path.name.clone(), regions);
-        }
-        
-        // For entropy complexity, also find individual windows with merged output
-        if args.complexity_type == "entropy" {
-            let windows = find_low_complexity_windows(&complexity, threshold, window_size, step_size);
-            if !windows.is_empty() {
-                path_windows.insert(path.name.clone(), windows);
-            }
+            path_windows.insert(path.name.clone(), windows);
         }
     }
     
@@ -561,13 +534,13 @@ fn main() -> std::io::Result<()> {
     }
     
     if let Some(bed_file) = &args.bed {
-        if args.complexity_type == "entropy" {
+        let with_entropy = args.complexity_type == "entropy";
+        if with_entropy {
             println!("Writing BED file with low-complexity windows...");
-            write_bed_file_with_entropy(&path_windows, bed_file, &gfa.paths)?;
         } else {
             println!("Writing BED file with low-complexity regions...");
-            write_bed_file(&path_regions, bed_file, &gfa.paths)?;
         }
+        write_bed_file(&path_regions, &path_windows, bed_file, &gfa.paths, with_entropy)?;
         println!("BED file written to: {}", bed_file);
     }
     
@@ -589,41 +562,35 @@ fn main() -> std::io::Result<()> {
 
 fn write_bed_file(
     path_regions: &HashMap<String, Vec<(usize, usize)>>,
-    bed_file: &str,
-    paths: &[Path],
-) -> std::io::Result<()> {
-    let mut file = File::create(bed_file)?;
-    
-    for path in paths {
-        if let Some(regions) = path_regions.get(&path.name) {
-            for (i, &(start, end)) in regions.iter().enumerate() {
-                writeln!(
-                    file,
-                    "{}\t{}\t{}\tlow_complexity_region_{}\t0\t+",
-                    path.name, start, end, i + 1
-                )?;
-            }
-        }
-    }
-    
-    Ok(())
-}
-
-fn write_bed_file_with_entropy(
     path_windows: &HashMap<String, Vec<(usize, usize, f64)>>,
     bed_file: &str,
     paths: &[Path],
+    with_entropy: bool,
 ) -> std::io::Result<()> {
     let mut file = File::create(bed_file)?;
     
     for path in paths {
-        if let Some(windows) = path_windows.get(&path.name) {
-            for &(start, end, entropy) in windows.iter() {
-                writeln!(
-                    file,
-                    "{}\t{}\t{}\t{:.4}",
-                    path.name, start, end, entropy
-                )?;
+        if with_entropy {
+            // Write with entropy values
+            if let Some(windows) = path_windows.get(&path.name) {
+                for &(start, end, entropy) in windows.iter() {
+                    writeln!(
+                        file,
+                        "{}\t{}\t{}\t{:.4}",
+                        path.name, start, end, entropy
+                    )?;
+                }
+            }
+        } else {
+            // Write with generic region labels
+            if let Some(regions) = path_regions.get(&path.name) {
+                for (i, &(start, end)) in regions.iter().enumerate() {
+                    writeln!(
+                        file,
+                        "{}\t{}\t{}\tlow_complexity_region_{}\t0\t+",
+                        path.name, start, end, i + 1
+                    )?;
+                }
             }
         }
     }

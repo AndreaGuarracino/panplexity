@@ -275,6 +275,55 @@ fn find_low_complexity_regions(
     merged
 }
 
+fn find_low_complexity_windows(
+    complexity: &[f64],
+    threshold: f64,
+    window_size: usize,
+    step_size: usize,
+) -> Vec<(usize, usize, f64)> {
+    let mut windows = Vec::new();
+    
+    // Find all windows below threshold
+    for (i, &score) in complexity.iter().enumerate() {
+        if score < threshold {
+            let start = i * step_size;
+            let end = start + window_size;
+            windows.push((start, end, score));
+        }
+    }
+    
+    // Merge overlapping windows like Python script does
+    if windows.is_empty() {
+        return windows;
+    }
+    
+    windows.sort_by_key(|w| w.0);
+    let mut merged = Vec::new();
+    let mut current_region = windows[0];
+    let mut entropies = vec![current_region.2];
+    
+    for &window in windows.iter().skip(1) {
+        if window.0 <= current_region.1 {
+            // Overlapping - merge
+            current_region.1 = current_region.1.max(window.1);
+            entropies.push(window.2);
+        } else {
+            // Non-overlapping - finalize current region
+            let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+            merged.push((current_region.0, current_region.1, mean_entropy));
+            
+            current_region = window;
+            entropies = vec![window.2];
+        }
+    }
+    
+    // Add final region
+    let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+    merged.push((current_region.0, current_region.1, mean_entropy));
+    
+    merged
+}
+
 fn map_regions_to_nodes(
     path: &Path,
     nodes: &HashMap<String, Node>,
@@ -454,6 +503,7 @@ fn main() -> std::io::Result<()> {
     
     let mut all_marked_nodes = HashSet::new();
     let mut path_regions = HashMap::new();
+    let mut path_windows = HashMap::new();
     
     println!("Analyzing {} paths...", gfa.paths.len());
     for path in &gfa.paths {
@@ -479,8 +529,11 @@ fn main() -> std::io::Result<()> {
             _ => unreachable!(), // Already validated above
         };
         
-        // Find low-complexity regions
+        // Find low-complexity regions (for merged regions)
         let regions = find_low_complexity_regions(&complexity, threshold, window_size, args.merge_threshold);
+        
+        // Find individual low-complexity windows (for detailed output)
+        let windows = find_low_complexity_windows(&complexity, threshold, window_size, step_size);
         
         if !regions.is_empty() {
             println!("  Found {} low-complexity regions", regions.len());
@@ -490,6 +543,10 @@ fn main() -> std::io::Result<()> {
             all_marked_nodes.extend(marked);
             
             path_regions.insert(path.name.clone(), regions);
+        }
+        
+        if !windows.is_empty() {
+            path_windows.insert(path.name.clone(), windows);
         }
     }
     
@@ -503,8 +560,8 @@ fn main() -> std::io::Result<()> {
     }
     
     if let Some(bed_file) = &args.bed {
-        println!("Writing BED file with low-complexity regions...");
-        write_bed_file(&path_regions, bed_file, &gfa.paths)?;
+        println!("Writing BED file with low-complexity windows...");
+        write_bed_file_with_entropy(&path_windows, bed_file, &gfa.paths)?;
         println!("BED file written to: {}", bed_file);
     }
     
@@ -538,6 +595,28 @@ fn write_bed_file(
                     file,
                     "{}\t{}\t{}\tlow_complexity_region_{}\t0\t+",
                     path.name, start, end, i + 1
+                )?;
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+fn write_bed_file_with_entropy(
+    path_windows: &HashMap<String, Vec<(usize, usize, f64)>>,
+    bed_file: &str,
+    paths: &[Path],
+) -> std::io::Result<()> {
+    let mut file = File::create(bed_file)?;
+    
+    for path in paths {
+        if let Some(windows) = path_windows.get(&path.name) {
+            for &(start, end, entropy) in windows.iter() {
+                writeln!(
+                    file,
+                    "{}\t{}\t{}\t{:.4}",
+                    path.name, start, end, entropy
                 )?;
             }
         }

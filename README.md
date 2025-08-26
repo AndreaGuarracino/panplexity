@@ -1,10 +1,6 @@
 # Panplexity
 
-A tool for identifying and annotating low-complexity regions in pangenome graphs (GFA format).
-
-## Overview
-
-Panplexity analyzes sequences in GFA files to identify low-complexity regions using linguistic complexity measures based on k-mer diversity. It can output results in multiple formats for downstream analysis and visualization.
+Find low-complexity regions in pangenome graphs using linguistic complexity or Shannon entropy.
 
 ## Installation
 
@@ -17,45 +13,43 @@ cargo build --release
 ## Usage
 
 ```bash
-./target/release/panplexity -g input.gfa -k 3 -w 100 -t 0.5 [OPTIONS]
+./target/release/panplexity -i input.gfa -w 100 -t 0.5 [OPTIONS]
 ```
 
-### Required Parameters
+### Required
+- `-i/--input-gfa`: GFA file (`.gfa`, `.gfa.gz`, `.gfa.bgz`)
+- `-w/--window-size`: Window size
+- `-t/--threshold`: Complexity threshold
 
-- `-g, --gfa <FILE>`: Input GFA file
-- `-k, --k <SIZE>`: K-mer size for complexity calculation
-- `-w, --window-size <SIZE>`: Window size for sliding window analysis
-- `-t, --threshold <VALUE>`: Threshold for identifying low-complexity regions
+### Parameters
+- `--complexity`: Complexity type: "linguistic" or "entropy" (default: "linguistic")
+- `-k/--k-mer`: K-mer size for linguistic complexity (default: 16)
+- `-s/--step-size`: Step size for entropy sliding window (default: 50)
+- `-d/--distance`: Distance for merging nearby regions (default: 100)
 
-### Output Options (at least one required)
 
-- `-o, --output <FILE>`: Output annotated GFA file with LC tags
-- `--bed <FILE>`: BED file with low-complexity region coordinates
-- `-c, --csv <FILE>`: CSV file for Bandage node coloring (Node,Colour format)
-- `-m, --mask <FILE>`: Boolean mask file (1=not annotated, 0=annotated)
+### Output options (at least one required)
+- `-o/--output-gfa`: Annotated GFA with nodes marked with `LC:i:1` and `CL:z:red` tags
+- `-b/--bed`: BED file with low-complexity ranges and scores
+- `-c/--csv`: CSV file for Bandage node coloring (Node,Colour format)
+- `-m/--mask`: Boolean mask file (0=low-complexity, 1=normal)
 
-### Optional Parameters
-
-- `-d, --distance <BP>`: Distance threshold for merging close ranges (default: 100)
-
-## Example
+## Examples
 
 ```bash
-# Basic analysis with annotated GFA output
-./target/release/panplexity -g graph.gfa -k 3 -w 50 -t 0.3 -o annotated.gfa
+# Linguistic complexity with BED output
+./target/release/panplexity -i input.gfa -w 100 -t 0.5 -b output.bed
+
+# Shannon entropy with annotated GFA output
+./target/release/panplexity -i input.gfa -w 50 -t 1.5 --complexity entropy -o annotated.gfa
 
 # Multiple output formats
-./target/release/panplexity -g graph.gfa -k 3 -w 50 -t 0.3 \
-    -o annotated.gfa --bed regions.bed -c colors.csv -m mask.txt
-
-# Merge close regions within 200bp
-./target/release/panplexity -g graph.gfa -k 3 -w 50 -t 0.3 \
-    -o annotated.gfa -d 200
+./target/release/panplexity -i input.gfa -w 200 -t 0.3 -b regions.bed -c bandage.csv -m mask.txt
 ```
 
 ## Output Formats
 
-- **Annotated GFA**: Original GFA with `LC:i:1` and `CL:z:red` tags on low-complexity nodes
-- **BED**: Tab-separated format with region coordinates for each path
-- **CSV**: Bandage-compatible node coloring file
-- **Mask**: Boolean mask with one line per node (sorted by node ID)
+- **BED**: `chrom start end complexity_score 0 +`
+- **CSV**: `Node,Colour` format for Bandage visualization
+- **Mask**: One value per node (0=low-complexity, 1=normal)
+- **GFA**: Original GFA with `LC:i:1` and `CL:z:red` tags on low-complexity nodes

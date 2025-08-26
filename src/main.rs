@@ -165,38 +165,9 @@ fn linguistic_complexity_sliding(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     res
 }
 
-// Linguistic complexity function with step size support
+// Linguistic complexity function
 pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
-    // For linguistic complexity, we want non-overlapping windows
-    // So step size should equal window size
-    linguistic_complexity_with_step(seq, k, w, w)
-}
-
-// Linguistic complexity function with configurable step size
-fn linguistic_complexity_with_step(seq: &[u8], k: u8, w: usize, step: usize) -> Vec<f64> {
-    if step == 1 {
-        // Use the original sliding window approach
-        return linguistic_complexity_sliding(seq, k, w);
-    }
-    
-    // For non-overlapping or custom step size, sample the sequence at intervals
-    let mut results = Vec::new();
-    let n = seq.len();
-    
-    for start in (0..=n.saturating_sub(w)).step_by(step) {
-        let end = (start + w).min(n);
-        if end - start >= w {
-            // Extract window and compute linguistic complexity for this single window
-            let window_seq = &seq[start..end];
-            let single_result = linguistic_complexity_sliding(window_seq, k, w);
-            // Take the first (and only meaningful) result for this exact window
-            if !single_result.is_empty() {
-                results.push(single_result[0]);
-            }
-        }
-    }
-    
-    results
+    linguistic_complexity_sliding(seq, k, w)
 }
 
 #[derive(Clone)]
@@ -511,10 +482,6 @@ struct Args {
     #[arg(short = 'm', long = "mask")]
     mask: Option<String>,
     
-    /// Output all complexity values for all windows (for debugging)
-    #[arg(long = "emit-all")]
-    emit_all: Option<String>,
-    
     /// Verbosity level (0: errors only, 1: errors and info, 2: debug, 3: trace)
     #[arg(short = 'v', long = "verbose", default_value = "1")]
     verbose: u8,
@@ -535,8 +502,8 @@ fn main() -> std::io::Result<()> {
         .init();
     
     // Check that at least one output format is specified
-    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() && args.emit_all.is_none() {
-        error!("At least one output format must be specified (--output-gfa, --bed, --csv, --mask, or --emit-all)");
+    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() {
+        error!("At least one output format must be specified (--output-gfa, --bed, --csv, or --mask)");
         std::process::exit(1);
     }
     
@@ -642,26 +609,11 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-        
-        // Write emit-all file if specified
-        if let Some(emit_all_file) = &args.emit_all {
-            info!("Writing all complexity values...");
-            let step_size = if args.complexity == "linguistic" {
-                window_size
-            } else {
-                args.step_size
-            };
-            write_all_complexity_file(&path_complexity_data, emit_all_file, window_size, step_size, &args.complexity)?;
-            info!("All complexity values written to: {}", emit_all_file);
-        }
     } else {
         // Single-pass processing for manual threshold
         let threshold = args.threshold.unwrap();
         info!("Using threshold: {:.4}", threshold);
         info!("Analyzing {} paths (single pass)...", gfa.paths.len());
-        
-        // Collect complexity data if emit-all is specified
-        let mut path_complexity_data: HashMap<String, Vec<f64>> = HashMap::new();
         
         for path in &gfa.paths {
             debug!("Processing path: {}", path.name);
@@ -684,11 +636,6 @@ fn main() -> std::io::Result<()> {
                 },
                 _ => unreachable!(), // Already validated above
             };
-            
-            // Store complexity data if emit-all is specified
-            if args.emit_all.is_some() {
-                path_complexity_data.insert(path.name.clone(), complexity.clone());
-            }
             
             // For linguistic complexity, step_size is same as window_size (no overlap)
             // For entropy complexity, use provided step_size
@@ -716,18 +663,6 @@ fn main() -> std::io::Result<()> {
                 path_regions.insert(path.name.clone(), regions);
                 path_windows.insert(path.name.clone(), windows);
             }
-        }
-        
-        // Write emit-all file if specified
-        if let Some(emit_all_file) = &args.emit_all {
-            info!("Writing all complexity values...");
-            let step_size = if args.complexity == "linguistic" {
-                window_size
-            } else {
-                args.step_size
-            };
-            write_all_complexity_file(&path_complexity_data, emit_all_file, window_size, step_size, &args.complexity)?;
-            info!("All complexity values written to: {}", emit_all_file);
         }
     }
     
@@ -828,38 +763,3 @@ fn write_mask_file(
     Ok(())
 }
 
-fn write_all_complexity_file(
-    path_complexity_data: &HashMap<String, Vec<f64>>,
-    all_complexity_file: &str,
-    window_size: usize,
-    step_size: usize,
-    complexity_type: &str,
-) -> std::io::Result<()> {
-    let mut file = File::create(all_complexity_file)?;
-    
-    // Write header
-    writeln!(file, "path\twindow_index\tstart_pos\tend_pos\tcomplexity_value")?;
-    
-    // Write all complexity values
-    for (path_name, complexity_values) in path_complexity_data {
-        for (i, &complexity) in complexity_values.iter().enumerate() {
-            // Calculate window positions
-            let start_pos = if complexity_type == "linguistic" {
-                // Non-overlapping windows for linguistic complexity
-                i * window_size
-            } else {
-                // Overlapping windows for entropy complexity
-                i * step_size
-            };
-            let end_pos = start_pos + window_size;
-            
-            writeln!(
-                file,
-                "{}\t{}\t{}\t{}\t{:.6}",
-                path_name, i, start_pos, end_pos, complexity
-            )?;
-        }
-    }
-    
-    Ok(())
-}

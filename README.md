@@ -34,7 +34,6 @@ panplexity -i input.gfa --auto-threshold [OPTIONS]
 - `-b/--bed`: BED file with regions
 - `-c/--csv`: Bandage coloring file
 - `-m/--mask`: Boolean mask
-- `--emit-all`: All complexity values (debugging)
 
 ## Examples
 
@@ -46,10 +45,7 @@ panplexity -i input.gfa -w 100 --auto-threshold -b regions.bed
 panplexity -i input.gfa -w 100 --complexity entropy --auto-threshold --iqr-multiplier 3.0 -o output.gfa
 
 # Multiple output formats
-panplexity -i input.gfa -w 100 -b regions.bed -c bandage.csv -m mask.txt
-
-# Debug complexity values
-panplexity -i input.gfa -w 100 --threshold 0.9 --emit-all debug.tsv
+panplexity -i input.gfa -w 100 --threshold 0.9 -b regions.bed -c bandage.csv -m mask.txt
 ```
 
 ## Output Formats

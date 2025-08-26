@@ -292,7 +292,7 @@ fn find_low_complexity_windows(
         }
     }
     
-    // Merge overlapping windows like Python script does
+    // Merge overlapping windows
     if windows.is_empty() {
         return windows;
     }
@@ -532,9 +532,6 @@ fn main() -> std::io::Result<()> {
         // Find low-complexity regions (for merged regions)
         let regions = find_low_complexity_regions(&complexity, threshold, window_size, args.merge_threshold);
         
-        // Find individual low-complexity windows (for detailed output)
-        let windows = find_low_complexity_windows(&complexity, threshold, window_size, step_size);
-        
         if !regions.is_empty() {
             println!("  Found {} low-complexity regions", regions.len());
             
@@ -545,8 +542,12 @@ fn main() -> std::io::Result<()> {
             path_regions.insert(path.name.clone(), regions);
         }
         
-        if !windows.is_empty() {
-            path_windows.insert(path.name.clone(), windows);
+        // For entropy complexity, also find individual windows with merged output
+        if args.complexity_type == "entropy" {
+            let windows = find_low_complexity_windows(&complexity, threshold, window_size, step_size);
+            if !windows.is_empty() {
+                path_windows.insert(path.name.clone(), windows);
+            }
         }
     }
     
@@ -560,8 +561,13 @@ fn main() -> std::io::Result<()> {
     }
     
     if let Some(bed_file) = &args.bed {
-        println!("Writing BED file with low-complexity windows...");
-        write_bed_file_with_entropy(&path_windows, bed_file, &gfa.paths)?;
+        if args.complexity_type == "entropy" {
+            println!("Writing BED file with low-complexity windows...");
+            write_bed_file_with_entropy(&path_windows, bed_file, &gfa.paths)?;
+        } else {
+            println!("Writing BED file with low-complexity regions...");
+            write_bed_file(&path_regions, bed_file, &gfa.paths)?;
+        }
         println!("BED file written to: {}", bed_file);
     }
     

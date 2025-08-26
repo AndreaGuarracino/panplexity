@@ -17,14 +17,13 @@ cargo build --release
 panplexity -i input.gfa -t 0.9 [OPTIONS]
 
 # Automatic threshold
-panplexity -i input.gfa --auto-threshold [OPTIONS]
+panplexity -i input.gfa -t auto [OPTIONS]
 ```
 
 ### Key options
 - `-i/--input-gfa`: GFA file (`.gfa`, `.gfa.gz`, `.gfa.bgz`)
 - `-w/--window-size`: Window size for complexity calculation
-- `-t/--threshold`: Manual complexity threshold
-- `--auto-threshold`: Use automatic threshold (Q1 - 1.5×IQR)
+- `-t/--threshold`: Complexity threshold (number or "auto")
 - `--iqr-multiplier`: IQR multiplier for auto-threshold (default: 1.5)
 - `--complexity`: "linguistic" (default) or "entropy"
 
@@ -39,13 +38,13 @@ panplexity -i input.gfa --auto-threshold [OPTIONS]
 
 ```bash
 # Linguistic complexity with BED output and automatic threshold
-panplexity -i input.gfa -w 100 --auto-threshold -b regions.bed
+panplexity -i input.gfa -w 100 -t auto -b regions.bed
 
 # Shannon entropy with annotated GFA output and stricter threshold
-panplexity -i input.gfa -w 100 --complexity entropy --auto-threshold --iqr-multiplier 3.0 -o output.gfa
+panplexity -i input.gfa -w 100 --complexity entropy -t auto --iqr-multiplier 3.0 -o output.gfa
 
 # Multiple output formats
-panplexity -i input.gfa -w 100 --threshold 0.9 -b regions.bed -c bandage.csv -m mask.txt
+panplexity -i input.gfa -w 100 -t 0.9 -b regions.bed -c bandage.csv -m mask.txt
 ```
 
 ## Output Formats

@@ -457,16 +457,12 @@ struct Args {
     #[arg(short = 'w', long = "window-size")]
     window_size: usize,
     
-    /// Threshold for low-complexity regions (mutually exclusive with --auto-threshold)
-    #[arg(short = 't', long = "threshold", conflicts_with = "auto_threshold", conflicts_with = "iqr_multiplier")]
-    threshold: Option<f64>,
+    /// Threshold for low-complexity regions (number or "auto")
+    #[arg(short = 't', long = "threshold")]
+    threshold: String,
     
-    /// Use automatic threshold calculation based on IQR (Q1 - multiplier * IQR)
-    #[arg(long = "auto-threshold", conflicts_with = "threshold")]
-    auto_threshold: bool,
-    
-    /// IQR multiplier for automatic threshold (default: 1.5, use with --auto-threshold)
-    #[arg(long = "iqr-multiplier", default_value = "1.5", requires = "auto_threshold")]
+    /// IQR multiplier for automatic threshold (default: 1.5, use with threshold "auto")
+    #[arg(long = "iqr-multiplier", default_value = "1.5")]
     iqr_multiplier: f64,
     
     /// Complexity measure type: "linguistic" or "entropy" (default: "linguistic")
@@ -532,10 +528,13 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
     
-    // Check that either threshold or auto_threshold is specified
-    if args.threshold.is_none() && !args.auto_threshold {
-        error!("Either --threshold or --auto-threshold must be specified");
-        std::process::exit(1);
+    // Validate threshold argument
+    let is_auto_threshold = args.threshold == "auto";
+    if !is_auto_threshold {
+        if let Err(_) = args.threshold.parse::<f64>() {
+            error!("Threshold must be a number or 'auto'");
+            std::process::exit(1);
+        }
     }
     
     let input_file = FilePath::new(&args.input_gfa);
@@ -583,7 +582,7 @@ fn main() -> std::io::Result<()> {
     }
     
     // Determine threshold (either automatic or manual)
-    let threshold = if args.auto_threshold {
+    let threshold = if is_auto_threshold {
         // Calculate automatic threshold
         if all_complexity_values.is_empty() {
             error!("No complexity values computed, cannot determine automatic threshold");
@@ -598,7 +597,7 @@ fn main() -> std::io::Result<()> {
         
         auto_threshold
     } else {
-        let manual_threshold = args.threshold.unwrap();
+        let manual_threshold = args.threshold.parse::<f64>().unwrap();
         info!("Using manual threshold: {:.4}", manual_threshold);
         manual_threshold
     };

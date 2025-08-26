@@ -232,7 +232,6 @@ fn find_low_complexity_regions(
     window_size: usize,
     step_size: usize,
     merge_threshold: usize,
-    with_entropy: bool,
 ) -> (Vec<(usize, usize)>, Vec<(usize, usize, f64)>) {
     let mut windows_with_entropy = Vec::new();
     
@@ -275,11 +274,9 @@ fn find_low_complexity_regions(
             // Finalize current merged region
             merged_regions.push((current_start, current_end));
             
-            if with_entropy {
-                let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
-                merged_windows.push((current_start, current_end, mean_entropy));
-            }
-            
+            let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+            merged_windows.push((current_start, current_end, mean_entropy));
+        
             // Start new region
             current_start = start;
             current_end = end;
@@ -289,11 +286,9 @@ fn find_low_complexity_regions(
     
     // Add final region
     merged_regions.push((current_start, current_end));
-    if with_entropy {
-        let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
-        merged_windows.push((current_start, current_end, mean_entropy));
-    }
-    
+    let mean_entropy = entropies.iter().sum::<f64>() / entropies.len() as f64;
+    merged_windows.push((current_start, current_end, mean_entropy));
+
     (merged_regions, merged_windows)
 }
 
@@ -405,12 +400,12 @@ struct Args {
     complexity: String,
     
     /// K-mer size (used with linguistic complexity)
-    #[arg(short = 'k', long = "k-mer", default_value = "16")]
-    k: Option<u8>,
+    #[arg(short = 'k', long = "k-mer", default_value = "16", conflicts_with = "step_size")]
+    k: u8,
 
     /// Step size for sliding window (used with entropy complexity)
-    #[arg(short = 's', long = "step-size", default_value = "50")]
-    step_size: Option<usize>,
+    #[arg(short = 's', long = "step-size", default_value = "50", conflicts_with = "k")]
+    step_size: usize,
     
     /// Distance threshold for merging close ranges
     #[arg(short = 'd', long = "distance", default_value = "100")]
@@ -448,35 +443,10 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
     
-    // Validate k parameter for linguistic complexity
-    if args.complexity == "linguistic" && args.k.is_none() {
-        eprintln!("Error: k parameter is required when using linguistic complexity");
-        std::process::exit(1);
-    }
-    
-    // Validate step_size parameter - only for entropy complexity
-    if args.complexity == "linguistic" && args.step_size.is_some() {
-        eprintln!("Error: step_size parameter cannot be used with linguistic complexity");
-        std::process::exit(1);
-    }
-    
-    // Validate k parameter - only for linguistic complexity
-    if args.complexity == "entropy" && args.k.is_some() {
-        eprintln!("Error: k parameter cannot be used with entropy complexity");
-        std::process::exit(1);
-    }
-    
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
     let threshold = args.threshold;
-    // For linguistic complexity, step_size is same as window_size (no overlap)
-    // For entropy complexity, use provided step_size or default to window_size/2
-    let step_size = if args.complexity == "linguistic" {
-        window_size
-    } else {
-        args.step_size.unwrap_or(window_size / 2)
-    };
-    
+
     println!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
     
@@ -499,24 +469,28 @@ fn main() -> std::io::Result<()> {
         // Compute complexity based on selected method
         let complexity = match args.complexity.as_str() {
             "linguistic" => {
-                let k = args.k.unwrap(); // Already validated above
-                linguistic_complexity(&sequence, k, window_size)
+                linguistic_complexity(&sequence, args.k, window_size)
             },
             "entropy" => {
-                shannon_entropy_complexity(&sequence, window_size, step_size)
+                shannon_entropy_complexity(&sequence, window_size, args.step_size)
             },
             _ => unreachable!(), // Already validated above
         };
         
-        // Find low-complexity regions with optional complexity averaging
-        let with_scores = true; // Always compute scores for unified output
+        // Find low-complexity regions with complexity averaging
+        // For linguistic complexity, step_size is same as window_size (no overlap)
+        // For entropy complexity, use provided step_size
+        let step_size = if args.complexity == "linguistic" {
+            window_size
+        } else {
+            args.step_size
+        };
         let (regions, windows) = find_low_complexity_regions(
             &complexity, 
             threshold, 
             window_size, 
             step_size,
             args.merge_threshold,
-            with_scores
         );
         
         if !regions.is_empty() {

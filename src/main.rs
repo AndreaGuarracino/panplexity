@@ -542,13 +542,8 @@ fn main() -> std::io::Result<()> {
     }
     
     if let Some(bed_file) = &args.bed {
-        let with_entropy = args.complexity_type == "entropy";
-        if with_entropy {
-            println!("Writing BED file with low-complexity windows...");
-        } else {
-            println!("Writing BED file with low-complexity regions...");
-        }
-        write_bed_file(&path_regions, &path_windows, bed_file, &gfa.paths, with_entropy)?;
+        println!("Writing BED file with low-complexity regions...");
+        write_bed_file(&path_windows, bed_file, &gfa.paths)?;
         println!("BED file written to: {}", bed_file);
     }
     
@@ -569,36 +564,21 @@ fn main() -> std::io::Result<()> {
 }
 
 fn write_bed_file(
-    path_regions: &HashMap<String, Vec<(usize, usize)>>,
     path_windows: &HashMap<String, Vec<(usize, usize, f64)>>,
     bed_file: &str,
     paths: &[Path],
-    with_entropy: bool,
 ) -> std::io::Result<()> {
     let mut file = File::create(bed_file)?;
     
     for path in paths {
-        if with_entropy {
-            // Write with entropy values
-            if let Some(windows) = path_windows.get(&path.name) {
-                for &(start, end, entropy) in windows.iter() {
-                    writeln!(
-                        file,
-                        "{}\t{}\t{}\t{:.4}",
-                        path.name, start, end, entropy
-                    )?;
-                }
-            }
-        } else {
-            // Write with generic region labels
-            if let Some(regions) = path_regions.get(&path.name) {
-                for (i, &(start, end)) in regions.iter().enumerate() {
-                    writeln!(
-                        file,
-                        "{}\t{}\t{}\tlow_complexity_region_{}\t0\t+",
-                        path.name, start, end, i + 1
-                    )?;
-                }
+        if let Some(windows) = path_windows.get(&path.name) {
+            for &(start, end, complexity) in windows.iter() {
+                // Unified format: chrom start end complexity score strand
+                writeln!(
+                    file,
+                    "{}\t{}\t{}\t{:.4}\t0\t+",
+                    path.name, start, end, complexity
+                )?;
             }
         }
     }

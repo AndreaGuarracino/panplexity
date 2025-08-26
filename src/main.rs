@@ -98,8 +98,8 @@ fn shannon_entropy(seq: &[u8]) -> f64 {
     entropy
 }
 
-// Original linguistic complexity function (produces sliding window results)
-fn linguistic_complexity_sliding(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
+// Linguistic complexity function (produces sliding window results)
+fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
     assert!(k <= 31); // Assuming reasonable k-mer size
     assert!(usize::from(k) < w && w <= n);
@@ -166,10 +166,6 @@ fn linguistic_complexity_sliding(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     res
 }
 
-// Linguistic complexity function
-pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
-    linguistic_complexity_sliding(seq, k, w)
-}
 
 #[derive(Clone)]
 struct Node {
@@ -552,41 +548,42 @@ fn main() -> std::io::Result<()> {
     let mut path_regions = HashMap::new();
     let mut path_windows = HashMap::new();
     
-    if args.auto_threshold {
-        // Two-pass processing for automatic threshold
-        let mut all_complexity_values = Vec::new();
-        let mut path_complexity_data: HashMap<String, Vec<f64>> = HashMap::new();
+    // Two-pass processing
+    let mut all_complexity_values = Vec::new();
+    let mut path_complexity_data: HashMap<String, Vec<f64>> = HashMap::new();
+    
+    info!("Analyzing {} paths...", gfa.paths.len());
+    
+    // First pass: compute complexity for all paths
+    for path in &gfa.paths {
+        debug!("Processing path: {}", path.name);
         
-        info!("Analyzing {} paths (first pass: computing complexity)...", gfa.paths.len());
+        // Reconstruct path sequence
+        let sequence = reconstruct_path_sequence(path, &gfa.nodes);
         
-        // First pass: compute complexity for all paths
-        for path in &gfa.paths {
-            debug!("Processing path: {}", path.name);
-            
-            // Reconstruct path sequence
-            let sequence = reconstruct_path_sequence(path, &gfa.nodes);
-            
-            if sequence.len() <= window_size {
-                warn!("  Path too short for window size, skipping");
-                continue;
-            }
-            
-            // Compute complexity based on selected method
-            let complexity = match args.complexity.as_str() {
-                "linguistic" => {
-                    linguistic_complexity(&sequence, args.k, window_size)
-                },
-                "entropy" => {
-                    shannon_entropy_complexity(&sequence, window_size, args.step_size)
-                },
-                _ => unreachable!(), // Already validated above
-            };
-            
-            // Store complexity values for this path and collect all values
-            path_complexity_data.insert(path.name.clone(), complexity.clone());
-            all_complexity_values.extend(complexity.iter().copied());
+        if sequence.len() <= window_size {
+            warn!("  Path too short for window size, skipping");
+            continue;
         }
         
+        // Compute complexity based on selected method
+        let complexity = match args.complexity.as_str() {
+            "linguistic" => {
+                linguistic_complexity(&sequence, args.k, window_size)
+            },
+            "entropy" => {
+                shannon_entropy_complexity(&sequence, window_size, args.step_size)
+            },
+            _ => unreachable!(), // Already validated above
+        };
+        
+        // Store complexity values for this path and collect all values
+        path_complexity_data.insert(path.name.clone(), complexity.clone());
+        all_complexity_values.extend(complexity.iter().copied());
+    }
+    
+    // Determine threshold (either automatic or manual)
+    let threshold = if args.auto_threshold {
         // Calculate automatic threshold
         if all_complexity_values.is_empty() {
             error!("No complexity values computed, cannot determine automatic threshold");
@@ -598,68 +595,19 @@ fn main() -> std::io::Result<()> {
         info!("Automatic threshold calculation:");
         info!("  Q1, Q3, IQR (Q3 - Q1), IQR multiplier: {:.4}, {:.4}, {:.4}, {:.4}", q1, q3, iqr, args.iqr_multiplier);
         info!("  Using threshold: {:.4} ({:.4} - {:.4} * {:.4})", auto_threshold, q1, args.iqr_multiplier, iqr);
-
-        info!("Second pass: identifying low-complexity regions...");
         
-        // Second pass: identify low-complexity regions using the calculated threshold
-        for path in &gfa.paths {
-            if let Some(complexity) = path_complexity_data.get(&path.name) {
-                // For linguistic complexity, step_size is same as window_size (no overlap)
-                // For entropy complexity, use provided step_size
-                let step_size = if args.complexity == "linguistic" {
-                    window_size
-                } else {
-                    args.step_size
-                };
-                
-                let (regions, windows) = find_low_complexity_regions(
-                    complexity,
-                    auto_threshold,
-                    window_size,
-                    step_size,
-                    args.merge_threshold,
-                );
-                
-                if !regions.is_empty() {
-                    debug!("  Path {}: Found {} low-complexity regions", path.name, regions.len());
-                    
-                    // Map to nodes
-                    let marked = map_regions_to_nodes(path, &gfa.nodes, &regions);
-                    all_marked_nodes.extend(marked);
-                    
-                    path_regions.insert(path.name.clone(), regions);
-                    path_windows.insert(path.name.clone(), windows);
-                }
-            }
-        }
+        auto_threshold
     } else {
-        // Single-pass processing for manual threshold
-        let threshold = args.threshold.unwrap();
-        info!("Using threshold: {:.4}", threshold);
-        info!("Analyzing {} paths (single pass)...", gfa.paths.len());
-        
-        for path in &gfa.paths {
-            debug!("Processing path: {}", path.name);
-            
-            // Reconstruct path sequence
-            let sequence = reconstruct_path_sequence(path, &gfa.nodes);
-            
-            if sequence.len() <= window_size {
-                warn!("  Path too short for window size, skipping");
-                continue;
-            }
-            
-            // Compute complexity based on selected method
-            let complexity = match args.complexity.as_str() {
-                "linguistic" => {
-                    linguistic_complexity(&sequence, args.k, window_size)
-                },
-                "entropy" => {
-                    shannon_entropy_complexity(&sequence, window_size, args.step_size)
-                },
-                _ => unreachable!(), // Already validated above
-            };
-            
+        let manual_threshold = args.threshold.unwrap();
+        info!("Using manual threshold: {:.4}", manual_threshold);
+        manual_threshold
+    };
+
+    info!("Identifying low-complexity regions...");
+    
+    // Second pass: identify low-complexity regions using the determined threshold
+    for path in &gfa.paths {
+        if let Some(complexity) = path_complexity_data.get(&path.name) {
             // For linguistic complexity, step_size is same as window_size (no overlap)
             // For entropy complexity, use provided step_size
             let step_size = if args.complexity == "linguistic" {
@@ -669,7 +617,7 @@ fn main() -> std::io::Result<()> {
             };
             
             let (regions, windows) = find_low_complexity_regions(
-                &complexity,
+                complexity,
                 threshold,
                 window_size,
                 step_size,

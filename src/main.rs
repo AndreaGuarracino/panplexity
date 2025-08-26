@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write, Read};
 use std::path::Path as FilePath;
 use clap::Parser;
 use noodles::bgzf;
+use log::{error, info, warn, debug};
 
 // Shannon entropy complexity function
 pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -> Vec<f64> {
@@ -56,13 +57,14 @@ fn shannon_entropy(seq: &[u8]) -> f64 {
     entropy
 }
 
-// Linguistic complexity function (with minor fixes for compilation)
+// Linguistic complexity function
 pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
-    assert!(k <= 16); // Assuming reasonable k-mer size
+    assert!(k <= 31); // Assuming reasonable k-mer size
     assert!(usize::from(k) < w && w < n);
 
-    // Compute k-mers (simplified version - you'd use your actual k-mer library)
+    // Compute k-mers
+    // TODO: USE A GOOD K-MER LIBRARY!
     let mut kmers: Vec<u64> = Vec::with_capacity(n - usize::from(k) + 1);
     for i in 0..=(n - usize::from(k)) {
         let mut kmer = 0u64;
@@ -426,20 +428,35 @@ struct Args {
     /// Output boolean mask file: 1 if node is not annotated, 0 if annotated
     #[arg(short = 'm', long = "mask")]
     mask: Option<String>,
+    
+    /// Verbosity level (0: errors only, 1: errors and info, 2: debug, 3: trace)
+    #[arg(short = 'v', long = "verbose", default_value = "1")]
+    verbose: u8,
 }
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
     
+    // Initialize logger with verbosity level
+    let log_level = match args.verbose {
+        0 => "error",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
+        .init();
+    
     // Check that at least one output format is specified
     if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() {
-        eprintln!("Error: At least one output format must be specified (--output, --bed, --csv, or --mask)");
+        error!("At least one output format must be specified (--output-gfa, --bed, --csv, or --mask)");
         std::process::exit(1);
     }
     
     // Validate complexity type
     if args.complexity != "linguistic" && args.complexity != "entropy" {
-        eprintln!("Error: complexity must be either 'linguistic' or 'entropy'");
+        error!("complexity must be either 'linguistic' or 'entropy'");
         std::process::exit(1);
     }
     
@@ -447,22 +464,22 @@ fn main() -> std::io::Result<()> {
     let window_size = args.window_size;
     let threshold = args.threshold;
 
-    println!("Parsing GFA file...");
+    info!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
     
     let mut all_marked_nodes = HashSet::new();
     let mut path_regions = HashMap::new();
     let mut path_windows = HashMap::new();
     
-    println!("Analyzing {} paths...", gfa.paths.len());
+    info!("Analyzing {} paths...", gfa.paths.len());
     for path in &gfa.paths {
-        println!("Processing path: {}", path.name);
+        debug!("Processing path: {}", path.name);
         
         // Reconstruct path sequence
         let sequence = reconstruct_path_sequence(path, &gfa.nodes);
         
         if sequence.len() <= window_size {
-            println!("  Path too short for window size, skipping");
+            warn!("  Path too short for window size, skipping");
             continue;
         }
         
@@ -494,7 +511,7 @@ fn main() -> std::io::Result<()> {
         );
         
         if !regions.is_empty() {
-            println!("  Found {} low-complexity regions", regions.len());
+            debug!("  Found {} low-complexity regions", regions.len());
             
             // Map to nodes
             let marked = map_regions_to_nodes(path, &gfa.nodes, &regions);
@@ -505,34 +522,34 @@ fn main() -> std::io::Result<()> {
         }
     }
     
-    println!("Marked {} nodes as low-complexity", all_marked_nodes.len());
+    info!("Marked {} nodes as low-complexity", all_marked_nodes.len());
     
     if let Some(output_gfa_path) = &args.output_gfa {
-        println!("Writing annotated GFA...");
+        info!("Writing annotated GFA...");
         let output_file = FilePath::new(output_gfa_path);
         annotate_gfa(&gfa, &all_marked_nodes, &path_regions, output_file)?;
-        println!("Annotated GFA written to: {}", output_gfa_path);
+        info!("Annotated GFA written to: {}", output_gfa_path);
     }
     
     if let Some(bed_file) = &args.bed {
-        println!("Writing BED file with low-complexity regions...");
+        info!("Writing BED file with low-complexity regions...");
         write_bed_file(&path_windows, bed_file, &gfa.paths)?;
-        println!("BED file written to: {}", bed_file);
+        info!("BED file written to: {}", bed_file);
     }
     
     if let Some(csv_file) = &args.csv {
-        println!("Writing CSV file for Bandage node coloring...");
+        info!("Writing CSV file for Bandage node coloring...");
         write_csv_file(&all_marked_nodes, csv_file)?;
-        println!("CSV file written to: {}", csv_file);
+        info!("CSV file written to: {}", csv_file);
     }
     
     if let Some(mask_file) = &args.mask {
-        println!("Writing boolean mask file...");
+        info!("Writing boolean mask file...");
         write_mask_file(&gfa.nodes, &all_marked_nodes, mask_file)?;
-        println!("Mask file written to: {}", mask_file);
+        info!("Mask file written to: {}", mask_file);
     }
     
-    println!("Done!");
+    info!("Done!");
     Ok(())
 }
 

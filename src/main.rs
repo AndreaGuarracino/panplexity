@@ -297,7 +297,6 @@ fn find_low_complexity_regions(
     (merged_regions, merged_windows)
 }
 
-
 fn map_regions_to_nodes(
     path: &Path,
     nodes: &HashMap<String, Node>,
@@ -390,46 +389,46 @@ fn annotate_gfa(
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Input GFA file
-    #[arg(short = 'g', long = "gfa")]
+    #[arg(short = 'i', long = "input-gfa")]
     input_gfa: String,
-    
-    /// Output annotated GFA file
-    #[arg(short = 'o', long = "output")]
-    output_gfa: Option<String>,
-    
-    /// K-mer size (used with linguistic complexity)
-    #[arg(short, long)]
-    k: Option<u8>,
-    
+           
     /// Window size for complexity calculation
-    #[arg(short, long)]
+    #[arg(short = 'w', long = "window-size")]
     window_size: usize,
     
     /// Threshold for low-complexity regions
-    #[arg(short, long)]
+    #[arg(short = 't', long = "threshold")]
     threshold: f64,
     
     /// Complexity measure type: "linguistic" or "entropy" (default: "linguistic")
     #[arg(long, default_value = "linguistic")]
-    complexity_type: String,
+    complexity: String,
     
-    /// Step size for sliding window (used with entropy complexity, default: window_size/2)
-    #[arg(long)]
+    /// K-mer size (used with linguistic complexity)
+    #[arg(short = 'k', long = "k-mer", default_value = "16")]
+    k: Option<u8>,
+
+    /// Step size for sliding window (used with entropy complexity)
+    #[arg(short = 's', long = "step-size", default_value = "50")]
     step_size: Option<usize>,
     
-    /// BED file to emit low-complexity ranges with info
-    #[arg(short, long)]
-    bed: Option<String>,
-    
-    /// CSV file for Bandage node coloring (Node,Colour format)
-    #[arg(short = 'c', long = "csv")]
-    csv: Option<String>,
-    
-    /// Distance threshold for merging close ranges in base pairs (default: 100)
+    /// Distance threshold for merging close ranges
     #[arg(short = 'd', long = "distance", default_value = "100")]
     merge_threshold: usize,
+
+    /// Output annotated GFA file
+    #[arg(short = 'o', long = "output-gfa")]
+    output_gfa: Option<String>,
+
+    /// Output BED file with low-complexity ranges
+    #[arg(short = 'b', long = "bed")]
+    bed: Option<String>,
     
-    /// Boolean mask file: 1 if node is not annotated, 0 if annotated
+    /// Output CSV file for Bandage node coloring (Node,Colour format)
+    #[arg(short = 'c', long = "csv")]
+    csv: Option<String>,
+        
+    /// Output boolean mask file: 1 if node is not annotated, 0 if annotated
     #[arg(short = 'm', long = "mask")]
     mask: Option<String>,
 }
@@ -444,25 +443,25 @@ fn main() -> std::io::Result<()> {
     }
     
     // Validate complexity type
-    if args.complexity_type != "linguistic" && args.complexity_type != "entropy" {
-        eprintln!("Error: complexity_type must be either 'linguistic' or 'entropy'");
+    if args.complexity != "linguistic" && args.complexity != "entropy" {
+        eprintln!("Error: complexity must be either 'linguistic' or 'entropy'");
         std::process::exit(1);
     }
     
     // Validate k parameter for linguistic complexity
-    if args.complexity_type == "linguistic" && args.k.is_none() {
+    if args.complexity == "linguistic" && args.k.is_none() {
         eprintln!("Error: k parameter is required when using linguistic complexity");
         std::process::exit(1);
     }
     
     // Validate step_size parameter - only for entropy complexity
-    if args.complexity_type == "linguistic" && args.step_size.is_some() {
+    if args.complexity == "linguistic" && args.step_size.is_some() {
         eprintln!("Error: step_size parameter cannot be used with linguistic complexity");
         std::process::exit(1);
     }
     
     // Validate k parameter - only for linguistic complexity
-    if args.complexity_type == "entropy" && args.k.is_some() {
+    if args.complexity == "entropy" && args.k.is_some() {
         eprintln!("Error: k parameter cannot be used with entropy complexity");
         std::process::exit(1);
     }
@@ -472,7 +471,7 @@ fn main() -> std::io::Result<()> {
     let threshold = args.threshold;
     // For linguistic complexity, step_size is same as window_size (no overlap)
     // For entropy complexity, use provided step_size or default to window_size/2
-    let step_size = if args.complexity_type == "linguistic" {
+    let step_size = if args.complexity == "linguistic" {
         window_size
     } else {
         args.step_size.unwrap_or(window_size / 2)
@@ -498,7 +497,7 @@ fn main() -> std::io::Result<()> {
         }
         
         // Compute complexity based on selected method
-        let complexity = match args.complexity_type.as_str() {
+        let complexity = match args.complexity.as_str() {
             "linguistic" => {
                 let k = args.k.unwrap(); // Already validated above
                 linguistic_complexity(&sequence, k, window_size)

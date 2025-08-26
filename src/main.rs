@@ -5,6 +5,7 @@ use std::path::Path as FilePath;
 use clap::Parser;
 use noodles::bgzf;
 use log::{error, info, warn, debug};
+use flate2::read::GzDecoder;
 
 // Shannon entropy complexity function
 pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -> Vec<f64> {
@@ -146,17 +147,39 @@ struct GFA {
 fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
     let file = File::open(filename)?;
     
-    // Check if file is gzip/bgzip compressed by reading magic bytes
+    // Check if file is gzip compressed by reading magic bytes
     let mut magic_bytes = [0u8; 3];
     let mut file_clone = File::open(filename)?;
     file_clone.read_exact(&mut magic_bytes)?;
     
-    let reader: Box<dyn BufRead> = if magic_bytes == [0x1f, 0x8b, 0x08] {
-        // bgzip/gzip compressed
-        let bgzf_reader = bgzf::Reader::new(file);
-        Box::new(BufReader::new(bgzf_reader))
+    let reader: Box<dyn BufRead> = if magic_bytes[0] == 0x1f && magic_bytes[1] == 0x8b {
+        // Gzip compressed - check if it's bgzip format (has extra bgzip magic bytes)
+        if magic_bytes[2] == 0x08 {
+            // Read more bytes to check for bgzip signature
+            let mut extended_magic = [0u8; 16];
+            let mut file_check = File::open(filename)?;
+            file_check.read_exact(&mut extended_magic)?;
+            
+            // Check for bgzip signature "BC" at position 12-13
+            if extended_magic.len() >= 14 && extended_magic[12] == b'B' && extended_magic[13] == b'C' {
+                debug!("Using bgzip reader for bgzip compressed file");
+                let file_for_bgzf = File::open(filename)?;
+                let bgzf_reader = bgzf::Reader::new(file_for_bgzf);
+                Box::new(BufReader::new(bgzf_reader))
+            } else {
+                debug!("Using standard gzip reader for gzip compressed file");
+                let file_for_gzip = File::open(filename)?;
+                let gz_decoder = GzDecoder::new(file_for_gzip);
+                Box::new(BufReader::new(gz_decoder))
+            }
+        } else {
+            debug!("Using standard gzip reader for gzip compressed file");
+            let file_for_gzip = File::open(filename)?;
+            let gz_decoder = GzDecoder::new(file_for_gzip);
+            Box::new(BufReader::new(gz_decoder))
+        }
     } else {
-        // Uncompressed
+        debug!("Using uncompressed file reader");
         Box::new(BufReader::new(file))
     };
     

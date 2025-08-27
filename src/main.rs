@@ -7,6 +7,46 @@ use noodles::bgzf;
 use log::{error, info, warn, debug};
 use flate2::read::GzDecoder;
 
+// Function to calculate percentiles from sorted data
+fn calculate_percentile(sorted_data: &[f64], percentile: f64) -> f64 {
+    if sorted_data.is_empty() {
+        return 0.0;
+    }
+    
+    let index = (percentile / 100.0) * (sorted_data.len() - 1) as f64;
+    let lower = index.floor() as usize;
+    let upper = index.ceil() as usize;
+    
+    if lower == upper {
+        sorted_data[lower]
+    } else {
+        let weight = index - lower as f64;
+        sorted_data[lower] * (1.0 - weight) + sorted_data[upper] * weight
+    }
+}
+
+// Function to calculate IQR and derive threshold
+fn calculate_iqr_threshold(
+    complexity_values: &[f64],
+    iqr_multiplier: f64,
+) -> (f64, f64, f64, f64) {
+    if complexity_values.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    
+    let mut sorted = complexity_values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let q1 = calculate_percentile(&sorted, 25.0);
+    let q3 = calculate_percentile(&sorted, 75.0);
+    let iqr = q3 - q1;
+    
+    // Calculate threshold using Q1 - multiplier * IQR
+    let threshold = q1 - iqr_multiplier * iqr;
+    
+    (q1, q3, iqr, threshold)
+}
+
 // Shannon entropy complexity function
 pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -> Vec<f64> {
     if seq.is_empty() || window_size == 0 {
@@ -58,11 +98,11 @@ fn shannon_entropy(seq: &[u8]) -> f64 {
     entropy
 }
 
-// Linguistic complexity function
-pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
+// Linguistic complexity function (produces sliding window results)
+fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
     assert!(k <= 31); // Assuming reasonable k-mer size
-    assert!(usize::from(k) < w && w < n);
+    assert!(usize::from(k) < w && w <= n);
 
     // Compute k-mers
     // TODO: USE A GOOD K-MER LIBRARY!
@@ -125,6 +165,7 @@ pub fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     }
     res
 }
+
 
 #[derive(Clone)]
 struct Node {
@@ -416,9 +457,13 @@ struct Args {
     #[arg(short = 'w', long = "window-size")]
     window_size: usize,
     
-    /// Threshold for low-complexity regions
+    /// Threshold for low-complexity regions (number or "auto")
     #[arg(short = 't', long = "threshold")]
-    threshold: f64,
+    threshold: String,
+    
+    /// IQR multiplier for automatic threshold (default: 1.5, use with threshold "auto")
+    #[arg(long = "iqr-multiplier", default_value = "1.5")]
+    iqr_multiplier: f64,
     
     /// Complexity measure type: "linguistic" or "entropy" (default: "linguistic")
     #[arg(long, default_value = "linguistic")]
@@ -483,9 +528,17 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
     
+    // Validate threshold argument
+    let is_auto_threshold = args.threshold == "auto";
+    if !is_auto_threshold {
+        if let Err(_) = args.threshold.parse::<f64>() {
+            error!("Threshold must be a number or 'auto'");
+            std::process::exit(1);
+        }
+    }
+    
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
-    let threshold = args.threshold;
 
     info!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
@@ -494,7 +547,13 @@ fn main() -> std::io::Result<()> {
     let mut path_regions = HashMap::new();
     let mut path_windows = HashMap::new();
     
+    // Two-pass processing
+    let mut all_complexity_values = Vec::new();
+    let mut path_complexity_data: HashMap<String, Vec<f64>> = HashMap::new();
+    
     info!("Analyzing {} paths...", gfa.paths.len());
+    
+    // First pass: compute complexity for all paths
     for path in &gfa.paths {
         debug!("Processing path: {}", path.name);
         
@@ -517,31 +576,63 @@ fn main() -> std::io::Result<()> {
             _ => unreachable!(), // Already validated above
         };
         
-        // Find low-complexity regions with complexity averaging
-        // For linguistic complexity, step_size is same as window_size (no overlap)
-        // For entropy complexity, use provided step_size
-        let step_size = if args.complexity == "linguistic" {
-            window_size
-        } else {
-            args.step_size
-        };
-        let (regions, windows) = find_low_complexity_regions(
-            &complexity, 
-            threshold, 
-            window_size, 
-            step_size,
-            args.merge_threshold,
-        );
+        // Store complexity values for this path and collect all values
+        path_complexity_data.insert(path.name.clone(), complexity.clone());
+        all_complexity_values.extend(complexity.iter().copied());
+    }
+    
+    // Determine threshold (either automatic or manual)
+    let threshold = if is_auto_threshold {
+        // Calculate automatic threshold
+        if all_complexity_values.is_empty() {
+            error!("No complexity values computed, cannot determine automatic threshold");
+            std::process::exit(1);
+        }
         
-        if !regions.is_empty() {
-            debug!("  Found {} low-complexity regions", regions.len());
+        let (q1, q3, iqr, auto_threshold) = calculate_iqr_threshold(&all_complexity_values, args.iqr_multiplier);
+        
+        info!("Automatic threshold calculation:");
+        info!("  Q1, Q3, IQR (Q3 - Q1), IQR multiplier: {:.4}, {:.4}, {:.4}, {:.4}", q1, q3, iqr, args.iqr_multiplier);
+        info!("  Using threshold: {:.4} ({:.4} - {:.4} * {:.4})", auto_threshold, q1, args.iqr_multiplier, iqr);
+        
+        auto_threshold
+    } else {
+        let manual_threshold = args.threshold.parse::<f64>().unwrap();
+        info!("Using manual threshold: {:.4}", manual_threshold);
+        manual_threshold
+    };
+
+    info!("Identifying low-complexity regions...");
+    
+    // Second pass: identify low-complexity regions using the determined threshold
+    for path in &gfa.paths {
+        if let Some(complexity) = path_complexity_data.get(&path.name) {
+            // For linguistic complexity, step_size is same as window_size (no overlap)
+            // For entropy complexity, use provided step_size
+            let step_size = if args.complexity == "linguistic" {
+                window_size
+            } else {
+                args.step_size
+            };
             
-            // Map to nodes
-            let marked = map_regions_to_nodes(path, &gfa.nodes, &regions);
-            all_marked_nodes.extend(marked);
+            let (regions, windows) = find_low_complexity_regions(
+                complexity,
+                threshold,
+                window_size,
+                step_size,
+                args.merge_threshold,
+            );
             
-            path_regions.insert(path.name.clone(), regions);
-            path_windows.insert(path.name.clone(), windows);
+            if !regions.is_empty() {
+                debug!("  Path {}: Found {} low-complexity regions", path.name, regions.len());
+                
+                // Map to nodes
+                let marked = map_regions_to_nodes(path, &gfa.nodes, &regions);
+                all_marked_nodes.extend(marked);
+                
+                path_regions.insert(path.name.clone(), regions);
+                path_windows.insert(path.name.clone(), windows);
+            }
         }
     }
     
@@ -641,3 +732,4 @@ fn write_mask_file(
     
     Ok(())
 }
+

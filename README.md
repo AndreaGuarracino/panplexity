@@ -13,43 +13,43 @@ cargo build --release
 ## Usage
 
 ```bash
-./target/release/panplexity -i input.gfa -w 100 -t 0.5 [OPTIONS]
+# Manual threshold
+panplexity -i input.gfa -t 0.9 [OPTIONS]
+
+# Automatic threshold
+panplexity -i input.gfa -t auto [OPTIONS]
 ```
 
-### Required
+### Key options
 - `-i/--input-gfa`: GFA file (`.gfa`, `.gfa.gz`, `.gfa.bgz`)
-- `-w/--window-size`: Window size
-- `-t/--threshold`: Complexity threshold
+- `-w/--window-size`: Window size for complexity calculation
+- `-t/--threshold`: Complexity threshold (number or "auto")
+- `--iqr-multiplier`: IQR multiplier for auto-threshold (default: 1.5)
+- `--complexity`: "linguistic" (default) or "entropy"
 
-### Parameters
-- `--complexity`: Complexity type: "linguistic" or "entropy" (default: "linguistic")
-- `-k/--k-mer`: K-mer size for linguistic complexity (default: 16)
-- `-s/--step-size`: Step size for entropy sliding window (default: 50)
-- `-d/--distance`: Distance for merging nearby regions (default: 100)
+### Output formats (choose one or more)
 
-
-### Output options (at least one required)
-- `-o/--output-gfa`: Annotated GFA with nodes marked with `LC:i:1` and `CL:z:red` tags
-- `-b/--bed`: BED file with low-complexity ranges and scores
-- `-c/--csv`: CSV file for Bandage node coloring (Node,Colour format)
-- `-m/--mask`: Boolean mask file (0=low-complexity, 1=normal)
+- `-o/--output-gfa`: Annotated GFA
+- `-b/--bed`: BED file with regions
+- `-c/--csv`: Bandage coloring file
+- `-m/--mask`: Boolean mask
 
 ## Examples
 
 ```bash
-# Linguistic complexity with BED output
-./target/release/panplexity -i input.gfa -w 100 -t 0.5 -b output.bed
+# Linguistic complexity with BED output and automatic threshold
+panplexity -i input.gfa -w 100 -t auto -b regions.bed
 
-# Shannon entropy with annotated GFA output
-./target/release/panplexity -i input.gfa -w 50 -t 1.5 --complexity entropy -o annotated.gfa
+# Shannon entropy with annotated GFA output and stricter threshold
+panplexity -i input.gfa -w 100 --complexity entropy -t auto --iqr-multiplier 3.0 -o output.gfa
 
 # Multiple output formats
-./target/release/panplexity -i input.gfa -w 200 -t 0.3 -b regions.bed -c bandage.csv -m mask.txt
+panplexity -i input.gfa -w 100 -t 0.9 -b regions.bed -c bandage.csv -m mask.txt
 ```
 
 ## Output Formats
 
+- **GFA**: Original GFA with `LC:i:1` and `CL:z:red` tags on low-complexity nodes
 - **BED**: `chrom start end complexity_score 0 +`
 - **CSV**: `Node,Colour` format for Bandage visualization
 - **Mask**: One value per node (0=low-complexity, 1=normal)
-- **GFA**: Original GFA with `LC:i:1` and `CL:z:red` tags on low-complexity nodes

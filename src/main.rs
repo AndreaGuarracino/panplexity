@@ -750,7 +750,7 @@ fn write_bed_file(
                 // Unified format: chrom start end complexity score strand
                 writeln!(
                     file,
-                    "{}\t{}\t{}\t{:.4}\t0\t+",
+                    "{}\t{}\t{}\t{}\t0\t+",
                     path.name, start, end, complexity
                 )?;
             }
@@ -810,9 +810,6 @@ fn write_weights_file(
 ) -> std::io::Result<()> {
     let mut file = File::create(weights_file)?;
     
-    // Write header
-    writeln!(file, "node_id\tweight")?;
-    
     // Get sorted node IDs (assuming numeric IDs for proper ordering)
     let mut node_ids: Vec<&String> = nodes.keys().collect();
     node_ids.sort_by(|a, b| {
@@ -823,7 +820,7 @@ fn write_weights_file(
         }
     });
     
-    // Write node weights
+    // Write node weights (one per line, row N for node ID N)
     for node_id in node_ids {
         let weight = if let Some(complexities) = node_weights.get(node_id) {
             if complexities.is_empty() {
@@ -837,7 +834,7 @@ fn write_weights_file(
             0.0
         };
         
-        writeln!(file, "{}\t{:.6}", node_id, weight)?;
+        writeln!(file, "{}", weight)?;
     }
     
     Ok(())

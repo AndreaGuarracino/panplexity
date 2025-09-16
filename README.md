@@ -32,7 +32,8 @@ panplexity -i input.gfa -t auto [OPTIONS]
 - `-o/--output-gfa`: Annotated GFA
 - `-b/--bed`: BED file with regions
 - `-c/--csv`: Bandage coloring file
-- `-m/--mask`: Boolean mask
+- `-m/--mask`: Node boolean mask
+- `--weights`: Node complexity weights
 
 ## Examples
 
@@ -44,7 +45,7 @@ panplexity -i input.gfa -w 100 -t auto -b regions.bed
 panplexity -i input.gfa -w 100 --complexity entropy -t auto --iqr-multiplier 3.0 -o output.gfa
 
 # Multiple output formats
-panplexity -i input.gfa -w 100 -t 0.9 -b regions.bed -c bandage.csv -m mask.txt
+panplexity -i input.gfa -w 100 -t 0.9 -b regions.bed -c bandage.csv --weights weights.txt
 ```
 
 ## Output Formats
@@ -53,3 +54,4 @@ panplexity -i input.gfa -w 100 -t 0.9 -b regions.bed -c bandage.csv -m mask.txt
 - **BED**: `chrom start end complexity_score 0 +`
 - **CSV**: `Node,Colour` format for Bandage visualization
 - **Mask**: One value per node (0=low-complexity, 1=normal)
+- **Weights**: One weight per node

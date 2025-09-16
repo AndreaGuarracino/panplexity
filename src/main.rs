@@ -386,6 +386,46 @@ fn map_regions_to_nodes(
     marked_nodes
 }
 
+fn map_complexity_to_nodes(
+    path: &Path,
+    nodes: &HashMap<String, Node>,
+    complexity_values: &[f64],
+    window_size: usize,
+    step_size: usize,
+) -> HashMap<String, Vec<f64>> {
+    let mut node_complexities: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut current_pos = 0;
+    
+    for (node_id, _is_forward) in &path.nodes {
+        if let Some(node) = nodes.get(node_id) {
+            let node_start = current_pos;
+            let node_end = current_pos + node.length;
+            
+            // Find all complexity windows that overlap with this node
+            for (i, &complexity) in complexity_values.iter().enumerate() {
+                // Calculate window position based on complexity method
+                let window_start = if step_size == window_size {
+                    // Non-overlapping windows (linguistic) - direct sequence position
+                    i
+                } else {
+                    // Overlapping windows (entropy) - use step_size scaling
+                    i * step_size
+                };
+                let window_end = window_start + window_size;
+                
+                // Check if this window overlaps with the current node
+                if !(window_end < node_start || window_start >= node_end) {
+                    node_complexities.entry(node_id.clone()).or_insert_with(Vec::new).push(complexity);
+                }
+            }
+            
+            current_pos = node_end;
+        }
+    }
+    
+    node_complexities
+}
+
 fn annotate_gfa(
     gfa: &GFA,
     marked_nodes: &HashSet<String>,
@@ -497,6 +537,10 @@ struct Args {
     #[arg(short = 'm', long = "mask")]
     mask: Option<String>,
     
+    /// Output weights file: node_id and its associated complexity/entropy weight
+    #[arg(long = "weights")]
+    weights: Option<String>,
+    
     /// Verbosity level (0: errors only, 1: errors and info, 2: debug, 3: trace)
     #[arg(short = 'v', long = "verbose", default_value = "1")]
     verbose: u8,
@@ -517,8 +561,8 @@ fn main() -> std::io::Result<()> {
         .init();
     
     // Check that at least one output format is specified
-    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() {
-        error!("At least one output format must be specified (--output-gfa, --bed, --csv, or --mask)");
+    if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() && args.weights.is_none() {
+        error!("At least one output format must be specified (--output-gfa, --bed, --csv, --mask, or --weights)");
         std::process::exit(1);
     }
     
@@ -546,6 +590,7 @@ fn main() -> std::io::Result<()> {
     let mut all_marked_nodes = HashSet::new();
     let mut path_regions = HashMap::new();
     let mut path_windows = HashMap::new();
+    let mut all_node_weights: HashMap<String, Vec<f64>> = HashMap::new();
     
     // Two-pass processing
     let mut all_complexity_values = Vec::new();
@@ -604,7 +649,7 @@ fn main() -> std::io::Result<()> {
 
     info!("Identifying low-complexity regions...");
     
-    // Second pass: identify low-complexity regions using the determined threshold
+    // Second pass: identify low-complexity regions and collect node weights
     for path in &gfa.paths {
         if let Some(complexity) = path_complexity_data.get(&path.name) {
             // For linguistic complexity, step_size is same as window_size (no overlap)
@@ -614,6 +659,20 @@ fn main() -> std::io::Result<()> {
             } else {
                 args.step_size
             };
+            
+            // Collect node weights for this path
+            let node_complexities = map_complexity_to_nodes(
+                path, 
+                &gfa.nodes, 
+                complexity, 
+                window_size, 
+                step_size
+            );
+            
+            // Add to global node weights collection
+            for (node_id, complexities) in node_complexities {
+                all_node_weights.entry(node_id).or_insert_with(Vec::new).extend(complexities);
+            }
             
             let (regions, windows) = find_low_complexity_regions(
                 complexity,
@@ -661,6 +720,12 @@ fn main() -> std::io::Result<()> {
         info!("Writing boolean mask file...");
         write_mask_file(&gfa.nodes, &all_marked_nodes, mask_file)?;
         info!("Mask file written to: {}", mask_file);
+    }
+    
+    if let Some(weights_file) = &args.weights {
+        info!("Writing weights file...");
+        write_weights_file(&gfa.nodes, &all_node_weights, weights_file)?;
+        info!("Weights file written to: {}", weights_file);
     }
     
     info!("Done!");
@@ -728,6 +793,46 @@ fn write_mask_file(
     for node_id in node_ids {
         let mask_value = if marked_nodes.contains(node_id) { 0 } else { 1 };
         writeln!(file, "{}", mask_value)?;
+    }
+    
+    Ok(())
+}
+
+fn write_weights_file(
+    nodes: &HashMap<String, Node>,
+    node_weights: &HashMap<String, Vec<f64>>,
+    weights_file: &str,
+) -> std::io::Result<()> {
+    let mut file = File::create(weights_file)?;
+    
+    // Write header
+    writeln!(file, "node_id\tweight")?;
+    
+    // Get sorted node IDs (assuming numeric IDs for proper ordering)
+    let mut node_ids: Vec<&String> = nodes.keys().collect();
+    node_ids.sort_by(|a, b| {
+        // Try to parse as numbers first, fall back to string comparison
+        match (a.parse::<i32>(), b.parse::<i32>()) {
+            (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
+            _ => a.cmp(b),
+        }
+    });
+    
+    // Write node weights
+    for node_id in node_ids {
+        let weight = if let Some(complexities) = node_weights.get(node_id) {
+            if complexities.is_empty() {
+                0.0
+            } else {
+                // Calculate mean complexity/entropy as the weight
+                complexities.iter().sum::<f64>() / complexities.len() as f64
+            }
+        } else {
+            // No complexity data for this node (e.g., not covered by any path)
+            0.0
+        };
+        
+        writeln!(file, "{}\t{:.6}", node_id, weight)?;
     }
     
     Ok(())

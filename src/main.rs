@@ -395,29 +395,34 @@ fn map_complexity_to_nodes(
 ) -> HashMap<String, Vec<f64>> {
     let mut node_complexities: HashMap<String, Vec<f64>> = HashMap::new();
     let mut current_pos = 0;
+    let mut window_idx = 0;
     
     for (node_id, _is_forward) in &path.nodes {
         if let Some(node) = nodes.get(node_id) {
             let node_start = current_pos;
             let node_end = current_pos + node.length;
             
-            // Find all complexity windows that overlap with this node
-            for (i, &complexity) in complexity_values.iter().enumerate() {
-                // Calculate window position based on complexity method
-                let window_start = if step_size == window_size {
-                    // Non-overlapping windows (linguistic) - direct sequence position
-                    i
-                } else {
-                    // Overlapping windows (entropy) - use step_size scaling
-                    i * step_size
-                };
+            // Find overlapping windows using single pass
+            while window_idx < complexity_values.len() {
+                let window_start = if step_size == window_size { window_idx } else { window_idx * step_size };
                 let window_end = window_start + window_size;
                 
-                // Check if this window overlaps with the current node
-                if !(window_end < node_start || window_start >= node_end) {
-                    node_complexities.entry(node_id.clone()).or_insert_with(Vec::new).push(complexity);
+                if window_end < node_start {
+                    window_idx += 1;
+                } else if window_start >= node_end {
+                    break;
+                } else {
+                    node_complexities.entry(node_id.clone()).or_insert_with(Vec::new).push(complexity_values[window_idx]);
+                    window_idx += 1;
                 }
             }
+            
+            // Reset window index to current position for next node
+            window_idx = if step_size == window_size { 
+                (node_start / window_size).saturating_sub(1) 
+            } else { 
+                (node_start / step_size).saturating_sub(1) 
+            };
             
             current_pos = node_end;
         }

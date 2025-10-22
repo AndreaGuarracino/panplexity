@@ -1,11 +1,11 @@
+use clap::Parser;
+use flate2::read::GzDecoder;
+use log::{debug, error, info, warn};
+use noodles::bgzf;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path as FilePath;
-use clap::Parser;
-use noodles::bgzf;
-use log::{error, info, warn, debug};
-use flate2::read::GzDecoder;
 
 // Function to calculate percentiles from sorted data
 fn calculate_percentile(sorted_data: &[f64], percentile: f64) -> f64 {
@@ -541,7 +541,11 @@ struct Args {
     /// Output boolean mask file: 1 if node is not annotated, 0 if annotated
     #[arg(short = 'm', long = "mask")]
     mask: Option<String>,
-    
+
+    /// Split mask entries by strand when a node is visited in both orientations (use with --mask)
+    #[arg(long = "strand")]
+    strand: bool,
+
     /// Output weights file: node_id and its associated complexity/entropy weight
     #[arg(long = "weights")]
     weights: Option<String>,
@@ -562,8 +566,7 @@ fn main() -> std::io::Result<()> {
         _ => "trace",
     };
     
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
     
     // Check that at least one output format is specified
     if args.output_gfa.is_none() && args.bed.is_none() && args.csv.is_none() && args.mask.is_none() && args.weights.is_none() {
@@ -617,12 +620,8 @@ fn main() -> std::io::Result<()> {
         
         // Compute complexity based on selected method
         let complexity = match args.complexity.as_str() {
-            "linguistic" => {
-                linguistic_complexity(&sequence, args.k, window_size)
-            },
-            "entropy" => {
-                shannon_entropy_complexity(&sequence, window_size, args.step_size)
-            },
+            "linguistic" => linguistic_complexity(&sequence, args.k, window_size),
+            "entropy" => shannon_entropy_complexity(&sequence, window_size, args.step_size),
             _ => unreachable!(), // Already validated above
         };
         
@@ -723,7 +722,12 @@ fn main() -> std::io::Result<()> {
     
     if let Some(mask_file) = &args.mask {
         info!("Writing boolean mask file...");
-        write_mask_file(&gfa.nodes, &all_marked_nodes, mask_file)?;
+        let strand_map = if args.strand {
+            Some(build_node_strand_map(&gfa.paths))
+        } else {
+            None
+        };
+        write_mask_file(&gfa.nodes, &all_marked_nodes, mask_file, strand_map.as_ref())?;
         info!("Mask file written to: {}", mask_file);
     }
     
@@ -777,10 +781,28 @@ fn write_csv_file(
     Ok(())
 }
 
+fn build_node_strand_map(paths: &[Path]) -> HashMap<String, u8> {
+    let mut strand_map = HashMap::new();
+
+    for path in paths {
+        for (node_id, is_forward) in &path.nodes {
+            let entry = strand_map.entry(node_id.clone()).or_insert(0u8);
+            if *is_forward {
+                *entry |= 0x1;
+            } else {
+                *entry |= 0x2;
+            }
+        }
+    }
+
+    strand_map
+}
+
 fn write_mask_file(
     nodes: &HashMap<String, Node>,
     marked_nodes: &HashSet<String>,
     mask_file: &str,
+    strand_map: Option<&HashMap<String, u8>>,
 ) -> std::io::Result<()> {
     let mut file = File::create(mask_file)?;
     
@@ -797,7 +819,19 @@ fn write_mask_file(
     // Write mask: 1 if NOT annotated (not low-complexity), 0 if annotated (low-complexity)
     for node_id in node_ids {
         let mask_value = if marked_nodes.contains(node_id) { 0 } else { 1 };
-        writeln!(file, "{}", mask_value)?;
+        if let Some(map) = strand_map {
+            match map.get(node_id).copied().unwrap_or(0) {
+                0x3 => {
+                    writeln!(file, "{}", mask_value)?;
+                    writeln!(file, "{}", mask_value)?;
+                }
+                _ => {
+                    writeln!(file, "{}", mask_value)?;
+                }
+            }
+        } else {
+            writeln!(file, "{}", mask_value)?;
+        }
     }
     
     Ok(())
@@ -839,4 +873,3 @@ fn write_weights_file(
     
     Ok(())
 }
-

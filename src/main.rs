@@ -559,11 +559,16 @@ struct Args {
     input_gfa: String,
 
     /// Window size for complexity calculation
-    #[arg(short = 'w', long = "window-size", value_parser = parse_window_size)]
+    #[arg(
+        short = 'w',
+        long = "window-size",
+        default_value = "100",
+        value_parser = parse_window_size
+    )]
     window_size: usize,
 
     /// Threshold for low-complexity regions (number or "auto")
-    #[arg(short = 't', long = "threshold")]
+    #[arg(short = 't', long = "threshold", default_value = "auto")]
     threshold: String,
 
     /// IQR multiplier for automatic threshold (default: 1.5, use with threshold "auto")

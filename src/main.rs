@@ -29,6 +29,14 @@ fn base_to_index(base: u8) -> usize {
     }
 }
 
+#[inline]
+fn fill_counts(counts: &mut [usize; 5], window: &[u8]) {
+    counts.fill(0);
+    for &base in window {
+        counts[base_to_index(base)] += 1;
+    }
+}
+
 // Function to calculate percentiles from sorted data
 fn calculate_percentile(sorted_data: &[f64], percentile: f64) -> f64 {
     if sorted_data.is_empty() {
@@ -74,25 +82,22 @@ pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -
 
     let seq_len = seq.len();
     if seq_len <= window_size {
-        return vec![shannon_entropy(seq)];
+        let mut counts = [0usize; 5];
+        fill_counts(&mut counts, seq);
+        return vec![entropy_from_counts(&counts, seq_len)];
     }
 
     let step = step.max(1);
     let mut results = Vec::with_capacity((seq_len.saturating_sub(window_size)) / step + 1);
 
     let mut counts = [0usize; 5];
-    for &base in &seq[..window_size] {
-        counts[base_to_index(base)] += 1;
-    }
+    fill_counts(&mut counts, &seq[..window_size]);
     results.push(entropy_from_counts(&counts, window_size));
 
     if step >= window_size {
         let mut start = step;
         while start + window_size <= seq_len {
-            counts.fill(0);
-            for &base in &seq[start..start + window_size] {
-                counts[base_to_index(base)] += 1;
-            }
+            fill_counts(&mut counts, &seq[start..start + window_size]);
             results.push(entropy_from_counts(&counts, window_size));
             start += step;
         }
@@ -116,18 +121,6 @@ pub fn shannon_entropy_complexity(seq: &[u8], window_size: usize, step: usize) -
     results
 }
 
-fn shannon_entropy(seq: &[u8]) -> f64 {
-    if seq.is_empty() {
-        return 0.0;
-    }
-
-    let mut counts = [0usize; 5];
-    for &base in seq {
-        counts[base_to_index(base)] += 1;
-    }
-    entropy_from_counts(&counts, seq.len())
-}
-
 fn entropy_from_counts(counts: &[usize; 5], window_len: usize) -> f64 {
     if window_len == 0 {
         return 0.0;
@@ -148,24 +141,20 @@ fn entropy_from_counts(counts: &[usize; 5], window_len: usize) -> f64 {
 fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
     assert!(k <= 31); // Assuming reasonable k-mer size
-    assert!(usize::from(k) < w && w <= n);
+    assert!(usize::from(k) > 0 && usize::from(k) < w && w <= n);
 
     // Compute k-mers
     let k = usize::from(k);
     let mut kmers: Vec<u64> = Vec::with_capacity(n - k + 1);
-    if k == 0 {
-        kmers.resize(n + 1, 0);
-    } else {
-        let mut kmer = 0u64;
-        for &base in &seq[..k] {
-            kmer = (kmer << 2) | u64::from(base_to_code(base));
-        }
+    let mut kmer = 0u64;
+    for &base in &seq[..k] {
+        kmer = (kmer << 2) | u64::from(base_to_code(base));
+    }
+    kmers.push(kmer);
+    let mask = (1u64 << (2 * k)) - 1;
+    for &base in &seq[k..] {
+        kmer = ((kmer << 2) | u64::from(base_to_code(base))) & mask;
         kmers.push(kmer);
-        let mask = (1u64 << (2 * k)) - 1;
-        for &base in &seq[k..] {
-            kmer = ((kmer << 2) | u64::from(base_to_code(base))) & mask;
-            kmers.push(kmer);
-        }
     }
 
     let theoretical_max = std::cmp::min(w + 1 - k, 1 << (2 * k));
@@ -244,6 +233,7 @@ fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
     }
     file.seek(SeekFrom::Start(0))?;
 
+    // Select an appropriate reader (plain, gzip, or bgzip) without reopening the file.
     let reader: Box<dyn BufRead> = if read >= 2 && magic_bytes[0] == 0x1f && magic_bytes[1] == 0x8b
     {
         let is_bgzip = read >= 14
@@ -264,6 +254,7 @@ fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
         Box::new(BufReader::new(file))
     };
 
+    // Parse segments, paths, and edges eagerly so later stages can work in-memory.
     let mut nodes = HashMap::new();
     let mut paths = Vec::new();
     let mut edges = Vec::new();
@@ -346,6 +337,7 @@ fn find_low_complexity_regions(
     step_size: usize,
     merge_threshold: usize,
 ) -> (Vec<(usize, usize)>, Vec<(usize, usize, f64)>) {
+    // Single pass merge: expand active region while scores stay below threshold, tracking mean on the fly.
     let mut merged_regions = Vec::new();
     let mut merged_windows = Vec::new();
 
@@ -577,7 +569,8 @@ struct Args {
     #[arg(
         short = 'k',
         long = "k-mer",
-        default_value = "16",
+        default_value_t = 16,
+        value_parser = clap::value_parser!(u8).range(1..=31),
         conflicts_with = "step_size"
     )]
     k: u8,

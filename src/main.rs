@@ -37,6 +37,17 @@ fn fill_counts(counts: &mut [usize; 5], window: &[u8]) {
     }
 }
 
+fn parse_window_size(value: &str) -> Result<usize, String> {
+    let parsed: usize = value
+        .parse()
+        .map_err(|_| "window size must be a positive integer".to_string())?;
+    if parsed == 0 {
+        Err("window size must be greater than zero".into())
+    } else {
+        Ok(parsed)
+    }
+}
+
 // Function to calculate percentiles from sorted data
 fn calculate_percentile(sorted_data: &[f64], percentile: f64) -> f64 {
     if sorted_data.is_empty() {
@@ -140,8 +151,6 @@ fn entropy_from_counts(counts: &[usize; 5], window_len: usize) -> f64 {
 // Linguistic complexity function (produces sliding window results)
 fn linguistic_complexity(seq: &[u8], k: u8, w: usize) -> Vec<f64> {
     let n = seq.len();
-    assert!(k <= 31); // Assuming reasonable k-mer size
-    assert!(usize::from(k) > 0 && usize::from(k) < w && w <= n);
 
     // Compute k-mers
     let k = usize::from(k);
@@ -550,7 +559,7 @@ struct Args {
     input_gfa: String,
 
     /// Window size for complexity calculation
-    #[arg(short = 'w', long = "window-size")]
+    #[arg(short = 'w', long = "window-size", value_parser = parse_window_size)]
     window_size: usize,
 
     /// Threshold for low-complexity regions (number or "auto")
@@ -642,6 +651,11 @@ fn main() -> std::io::Result<()> {
     // Validate complexity type
     if args.complexity != "linguistic" && args.complexity != "entropy" {
         error!("complexity must be either 'linguistic' or 'entropy'");
+        std::process::exit(1);
+    }
+
+    if args.complexity == "linguistic" && usize::from(args.k) >= args.window_size {
+        error!("window size must be greater than k-mer length");
         std::process::exit(1);
     }
 

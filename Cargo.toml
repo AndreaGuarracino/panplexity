@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.51", features = ["derive"] }
-noodles = { version = "0.87.0", features = ["bgzf"] }
+noodles = { version = "0.101.0", features = ["bgzf"] }
 log = "0.4.28"
 env_logger = "0.11.8"
 flate2 = "1.1.5"

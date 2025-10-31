@@ -1,7 +1,7 @@
 use clap::Parser;
 use flate2::read::GzDecoder;
 use log::{debug, error, info, warn};
-use noodles::bgzf;
+use noodles::bgzf::{io::Reader as BgzfReader, io::Writer as BgzfWriter};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -252,7 +252,7 @@ fn parse_gfa(filename: &FilePath) -> std::io::Result<GFA> {
             && magic_bytes[13] == b'C';
         if is_bgzip {
             debug!("Using bgzip reader for bgzip compressed file");
-            let bgzf_reader = bgzf::Reader::new(file);
+            let bgzf_reader = BgzfReader::new(file);
             Box::new(BufReader::new(bgzf_reader))
         } else {
             debug!("Using standard gzip reader for gzip compressed file");
@@ -506,7 +506,7 @@ fn annotate_gfa(
         .unwrap_or(false);
 
     let mut writer: Box<dyn Write> = if should_compress {
-        Box::new(bgzf::Writer::new(file))
+        Box::new(BgzfWriter::new(file))
     } else {
         Box::new(file)
     };

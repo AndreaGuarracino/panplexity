@@ -1,6 +1,7 @@
 [package]
 name = "panplexity"
 version = "0.1.0"
+authors = ["Andrea Guarracino <aguarra1@uthsc.edu>"]
 edition = "2024"
 
 [dependencies]

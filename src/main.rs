@@ -537,14 +537,15 @@ fn annotate_gfa(
 
         // Add low-complexity regions as optional tags
         if let Some(regions) = path_regions.get(&path.name)
-            && !regions.is_empty() {
-                write!(writer, "\tLR:Z:")?;
-                let region_strs: Vec<String> = regions
-                    .iter()
-                    .map(|(s, e)| format!("{}-{}", s, e))
-                    .collect();
-                write!(writer, "{}", region_strs.join(","))?;
-            }
+            && !regions.is_empty()
+        {
+            write!(writer, "\tLR:Z:")?;
+            let region_strs: Vec<String> = regions
+                .iter()
+                .map(|(s, e)| format!("{}-{}", s, e))
+                .collect();
+            write!(writer, "{}", region_strs.join(","))?;
+        }
         writeln!(writer)?;
     }
 
@@ -675,15 +676,19 @@ fn main() -> std::io::Result<()> {
 
     // Validate threshold argument
     let is_auto_threshold = args.threshold == "auto";
-    if !is_auto_threshold
-        && args.threshold.parse::<f64>().is_err() {
-            error!("Threshold must be a number or 'auto'");
-            std::process::exit(1);
-        }
+    if !is_auto_threshold && args.threshold.parse::<f64>().is_err() {
+        error!("Threshold must be a number or 'auto'");
+        std::process::exit(1);
+    }
 
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
     let is_linguistic = args.complexity == "linguistic";
+    let need_weights = args.weights.is_some();
+    let need_marked_nodes = args.output_gfa.is_some() || args.mask.is_some() || args.csv.is_some();
+    let need_path_regions = args.output_gfa.is_some();
+    let need_windows = args.bed.is_some();
+    let need_region_calculations = need_marked_nodes || need_path_regions || need_windows;
 
     info!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
@@ -764,18 +769,31 @@ fn main() -> std::io::Result<()> {
                 args.step_size
             };
 
-            let node_complexities =
-                map_complexity_to_nodes(path, &gfa.nodes, complexity, window_size, step_size);
+            let node_complexities = if need_weights {
+                Some(map_complexity_to_nodes(
+                    path,
+                    &gfa.nodes,
+                    complexity,
+                    window_size,
+                    step_size,
+                ))
+            } else {
+                None
+            };
 
-            let (regions, windows) = find_low_complexity_regions(
-                complexity,
-                threshold,
-                window_size,
-                step_size,
-                args.merge_threshold,
-            );
+            let (regions, windows) = if need_region_calculations {
+                find_low_complexity_regions(
+                    complexity,
+                    threshold,
+                    window_size,
+                    step_size,
+                    args.merge_threshold,
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
 
-            if !regions.is_empty() {
+            if need_region_calculations && !regions.is_empty() {
                 debug!(
                     "  Path {}: Found {} low-complexity regions",
                     path.name,
@@ -783,17 +801,24 @@ fn main() -> std::io::Result<()> {
                 );
             }
 
-            let marked = if regions.is_empty() {
-                None
-            } else {
+            let marked = if need_marked_nodes && !regions.is_empty() {
                 Some(map_regions_to_nodes(path, &gfa.nodes, &regions))
+            } else {
+                None
             };
+
+            let stored_regions = if need_path_regions {
+                regions
+            } else {
+                Vec::new()
+            };
+            let stored_windows = if need_windows { windows } else { Vec::new() };
 
             Some((
                 path.name.clone(),
                 node_complexities,
-                regions,
-                windows,
+                stored_regions,
+                stored_windows,
                 marked,
             ))
         })
@@ -806,24 +831,28 @@ fn main() -> std::io::Result<()> {
 
     // Merge per-path outputs into the global structures expected by downstream writers.
     for (name, node_complexities, regions, windows, marked) in per_path_outputs {
-        for (node_id, complexities) in node_complexities {
-            all_node_weights
-                .entry(node_id)
-                .or_default()
-                .extend(complexities);
-        }
-
-        if regions.is_empty() {
-            continue;
+        if need_weights {
+            if let Some(node_complexities) = node_complexities {
+                for (node_id, complexities) in node_complexities {
+                    all_node_weights
+                        .entry(node_id)
+                        .or_default()
+                        .extend(complexities);
+                }
+            }
         }
 
         if let Some(marked_nodes) = marked {
             all_marked_nodes.extend(marked_nodes);
         }
 
-        let name_for_windows = name.clone();
-        path_regions.insert(name, regions);
-        path_windows.insert(name_for_windows, windows);
+        if need_path_regions && !regions.is_empty() {
+            path_regions.insert(name.clone(), regions);
+        }
+
+        if need_windows && !windows.is_empty() {
+            path_windows.insert(name, windows);
+        }
     }
 
     info!("Marked {} nodes as low-complexity", all_marked_nodes.len());

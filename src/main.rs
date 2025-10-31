@@ -2,6 +2,7 @@ use clap::Parser;
 use flate2::read::GzDecoder;
 use log::{debug, error, info, warn};
 use noodles::bgzf;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -625,6 +626,10 @@ struct Args {
     /// Verbosity level (0: errors only, 1: errors and info, 2: debug, 3: trace)
     #[arg(short = 'v', long = "verbose", default_value = "1")]
     verbose: u8,
+
+    /// Number of threads to use for parallel processing
+    #[arg(long = "threads", default_value_t = 4)]
+    threads: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -639,6 +644,11 @@ fn main() -> std::io::Result<()> {
     };
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level)).init();
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads.max(1))
+        .build_global()
+        .expect("failed to initialize rayon thread pool");
 
     // Check that at least one output format is specified
     if args.output_gfa.is_none()
@@ -675,43 +685,42 @@ fn main() -> std::io::Result<()> {
 
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
+    let is_linguistic = args.complexity == "linguistic";
 
     info!("Parsing GFA file...");
     let gfa = parse_gfa(input_file)?;
 
-    let mut all_marked_nodes = HashSet::new();
-    let mut path_regions = HashMap::new();
-    let mut path_windows = HashMap::new();
-    let mut all_node_weights: HashMap<String, Vec<f64>> = HashMap::new();
+    info!("Analyzing {} paths...", gfa.paths.len());
 
-    // Two-pass processing
+    // First pass: compute complexity values for each path independently in parallel.
+    let path_results: Vec<(String, Vec<f64>)> = gfa
+        .paths
+        .par_iter()
+        .filter_map(|path| {
+            debug!("Processing path: {}", path.name);
+            let sequence = reconstruct_path_sequence(path, &gfa.nodes);
+
+            if sequence.len() <= window_size {
+                warn!("  Path too short for window size, skipping");
+                return None;
+            }
+
+            let complexity = if is_linguistic {
+                linguistic_complexity(&sequence, args.k, window_size)
+            } else {
+                shannon_entropy_complexity(&sequence, window_size, args.step_size)
+            };
+
+            Some((path.name.clone(), complexity))
+        })
+        .collect();
+
     let mut all_complexity_values = Vec::new();
     let mut path_complexity_data: HashMap<String, Vec<f64>> = HashMap::new();
 
-    info!("Analyzing {} paths...", gfa.paths.len());
-
-    // First pass: compute complexity for all paths
-    for path in &gfa.paths {
-        debug!("Processing path: {}", path.name);
-
-        // Reconstruct path sequence
-        let sequence = reconstruct_path_sequence(path, &gfa.nodes);
-
-        if sequence.len() <= window_size {
-            warn!("  Path too short for window size, skipping");
-            continue;
-        }
-
-        // Compute complexity based on selected method
-        let complexity = match args.complexity.as_str() {
-            "linguistic" => linguistic_complexity(&sequence, args.k, window_size),
-            "entropy" => shannon_entropy_complexity(&sequence, window_size, args.step_size),
-            _ => unreachable!(), // Already validated above
-        };
-
-        // Store complexity values for this path and collect all values
-        path_complexity_data.insert(path.name.clone(), complexity.clone());
+    for (name, complexity) in path_results {
         all_complexity_values.extend(complexity.iter().copied());
+        path_complexity_data.insert(name, complexity);
     }
 
     // Determine threshold (either automatic or manual)
@@ -744,28 +753,21 @@ fn main() -> std::io::Result<()> {
 
     info!("Identifying low-complexity regions...");
 
-    // Second pass: identify low-complexity regions and collect node weights
-    for path in &gfa.paths {
-        if let Some(complexity) = path_complexity_data.get(&path.name) {
-            // For linguistic complexity, step_size is same as window_size (no overlap)
-            // For entropy complexity, use provided step_size
-            let step_size = if args.complexity == "linguistic" {
+    // Second pass: derive regions and node weights per path, again in parallel.
+    let per_path_outputs: Vec<_> = gfa
+        .paths
+        .par_iter()
+        .filter_map(|path| {
+            let complexity = path_complexity_data.get(&path.name)?;
+
+            let step_size = if is_linguistic {
                 window_size
             } else {
                 args.step_size
             };
 
-            // Collect node weights for this path
             let node_complexities =
                 map_complexity_to_nodes(path, &gfa.nodes, complexity, window_size, step_size);
-
-            // Add to global node weights collection
-            for (node_id, complexities) in node_complexities {
-                all_node_weights
-                    .entry(node_id)
-                    .or_insert_with(Vec::new)
-                    .extend(complexities);
-            }
 
             let (regions, windows) = find_low_complexity_regions(
                 complexity,
@@ -781,15 +783,49 @@ fn main() -> std::io::Result<()> {
                     path.name,
                     regions.len()
                 );
-
-                // Map to nodes
-                let marked = map_regions_to_nodes(path, &gfa.nodes, &regions);
-                all_marked_nodes.extend(marked);
-
-                path_regions.insert(path.name.clone(), regions);
-                path_windows.insert(path.name.clone(), windows);
             }
+
+            let marked = if regions.is_empty() {
+                None
+            } else {
+                Some(map_regions_to_nodes(path, &gfa.nodes, &regions))
+            };
+
+            Some((
+                path.name.clone(),
+                node_complexities,
+                regions,
+                windows,
+                marked,
+            ))
+        })
+        .collect();
+
+    let mut all_marked_nodes = HashSet::new();
+    let mut path_regions = HashMap::new();
+    let mut path_windows = HashMap::new();
+    let mut all_node_weights: HashMap<String, Vec<f64>> = HashMap::new();
+
+    // Merge per-path outputs into the global structures expected by downstream writers.
+    for (name, node_complexities, regions, windows, marked) in per_path_outputs {
+        for (node_id, complexities) in node_complexities {
+            all_node_weights
+                .entry(node_id)
+                .or_insert_with(Vec::new)
+                .extend(complexities);
         }
+
+        if regions.is_empty() {
+            continue;
+        }
+
+        if let Some(marked_nodes) = marked {
+            all_marked_nodes.extend(marked_nodes);
+        }
+
+        let name_for_windows = name.clone();
+        path_regions.insert(name, regions);
+        path_windows.insert(name_for_windows, windows);
     }
 
     info!("Marked {} nodes as low-complexity", all_marked_nodes.len());

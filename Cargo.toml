@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.5.45", features = ["derive"] }
+clap = { version = "4.5.51", features = ["derive"] }
 noodles = { version = "0.87.0", features = ["bgzf"] }
-log = "0.4.27"
+log = "0.4.28"
 env_logger = "0.11.8"
-flate2 = "1.0"
+flate2 = "1.1.5"
+rayon = "1.11.0"

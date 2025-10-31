@@ -22,6 +22,7 @@ panplexity -i input.gfa [OPTIONS]
 - `-t/--threshold`: Complexity threshold: number or "auto" (default)
 - `--iqr-multiplier`: IQR multiplier for auto-threshold (default: 1.5)
 - `--complexity`: "linguistic" (default) or "entropy"
+- `--threads`: Number of worker threads (default: 4)
 
 ### Output formats (choose one or more)
 

@@ -482,7 +482,7 @@ fn map_complexity_to_nodes(
         if !values.is_empty() {
             node_complexities
                 .entry(node_id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(values);
         }
     }
@@ -536,8 +536,8 @@ fn annotate_gfa(
         write!(writer, "{}", path_str.join(","))?;
 
         // Add low-complexity regions as optional tags
-        if let Some(regions) = path_regions.get(&path.name) {
-            if !regions.is_empty() {
+        if let Some(regions) = path_regions.get(&path.name)
+            && !regions.is_empty() {
                 write!(writer, "\tLR:Z:")?;
                 let region_strs: Vec<String> = regions
                     .iter()
@@ -545,7 +545,6 @@ fn annotate_gfa(
                     .collect();
                 write!(writer, "{}", region_strs.join(","))?;
             }
-        }
         writeln!(writer)?;
     }
 
@@ -676,12 +675,11 @@ fn main() -> std::io::Result<()> {
 
     // Validate threshold argument
     let is_auto_threshold = args.threshold == "auto";
-    if !is_auto_threshold {
-        if let Err(_) = args.threshold.parse::<f64>() {
+    if !is_auto_threshold
+        && args.threshold.parse::<f64>().is_err() {
             error!("Threshold must be a number or 'auto'");
             std::process::exit(1);
         }
-    }
 
     let input_file = FilePath::new(&args.input_gfa);
     let window_size = args.window_size;
@@ -811,7 +809,7 @@ fn main() -> std::io::Result<()> {
         for (node_id, complexities) in node_complexities {
             all_node_weights
                 .entry(node_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(complexities);
         }
 
